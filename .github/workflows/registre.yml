@@ -1,0 +1,35 @@
+# Extrait quotidien du Registre national des copropriétés (open data Anah) : met à jour registre/registre-copros.js (lu par K-BDD).
+name: Registre des copropriétés
+
+on:
+  schedule:
+    - cron: "41 7 * * *"   # chaque jour vers 9 h 40 (heure de Paris), après la publication quotidienne sur data.gouv.fr
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publication
+  cancel-in-progress: false
+
+jobs:
+  extrait:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Extraire les copropriétés du cabinet
+        run: node outils/registre.js
+      - name: Publier la mise à jour
+        run: |
+          git add registre/
+          if git diff --cached --quiet; then echo "Aucun changement."; exit 0; fi
+          git config user.name "registre-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Registre des copropriétés : extrait du $(date -u +%F)"
+          git pull --rebase
+          git push

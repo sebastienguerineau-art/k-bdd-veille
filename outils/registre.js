@@ -1,0 +1,76 @@
+/* Extrait quotidien du Registre national d'immatriculation des copropriétés (open data Anah, data.gouv.fr) :
+   copropriétés gérées par le cabinet, lues par K-BDD (fiche copro, registre, calendrier).
+   Usage : node outils/registre.js [fichier.csv local, pour essai]   (Node 20+) */
+"use strict";
+const fs = require("fs");
+const path = require("path");
+
+// cabinet : SIREN du syndic, établissement et département suivis
+const SIREN = "326650165";
+const ETABLISSEMENT = "32665016500185"; // KERMARREC SYNDIC, établissement de Rennes
+const DEPARTEMENT = "35";
+const JEU = "https://www.data.gouv.fr/api/1/datasets/registre-national-dimmatriculation-des-coproprietes/";
+const SORTIE = path.join(__dirname, "..", "registre", "registre-copros.js");
+const CHAMPS = ["numero_immatriculation", "date_immatriculation", "date_derniere_maj", "mandat_en_cours", "date_fin_dernier_mandat",
+  "nom_usage_copropriete", "numero_voie_adresse", "code_postal_adresse", "commune_adresse", "adresse_complementaire_1", "adresse_complementaire_2",
+  "nombre_total_lots", "nombre_lots_habitation", "nombre_lots_stationnement", "periode_construction", "syndicat_principal_ou_secondaire",
+  "siret_representant_legal", "copro_aidee"];
+
+/** Une ligne CSV (séparateur virgule, champs entre guillemets) en tableau de valeurs. */
+const lireLigne = (l) => {
+  const res = []; let v = "", q = false;
+  for (let i = 0; i < l.length; i++) {
+    const ch = l[i];
+    if (q) { if (ch === '"') { if (l[i + 1] === '"') { v += '"'; i++; } else q = false; } else v += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ",") { res.push(v); v = ""; }
+    else v += ch;
+  }
+  res.push(v);
+  return res;
+};
+
+/** Lit le CSV ligne par ligne (flux) et garde les copropriétés du cabinet. */
+async function filtrer(lignes) {
+  let entete = null; const copros = [];
+  for await (const l of lignes) {
+    if (!entete) { entete = lireLigne(l.replace(/^﻿/, "")); continue; }
+    if (!l.includes(SIREN)) continue; // filtre rapide avant le découpage
+    const v = lireLigne(l), x = Object.fromEntries(entete.map((k, i) => [k, (v[i] || "").trim()]));
+    if (!x.siret_representant_legal.startsWith(SIREN)) continue;
+    if (x.siret_representant_legal !== ETABLISSEMENT && !String(x.code_postal_adresse).startsWith(DEPARTEMENT)) continue;
+    copros.push(Object.fromEntries(CHAMPS.map((k) => [k, x[k] || ""])));
+  }
+  if (!entete || !entete.includes("numero_immatriculation")) throw new Error("Format du fichier du registre inattendu.");
+  return copros.sort((a, b) => a.numero_immatriculation.localeCompare(b.numero_immatriculation));
+}
+async function* lignesDe(flux) {
+  const dec = new TextDecoder("utf-8"); let reste = "";
+  for await (const morceau of flux) {
+    const t = reste + dec.decode(morceau, { stream: true }), ls = t.split("\n");
+    reste = ls.pop();
+    for (const l of ls) yield l.replace(/\r$/, "");
+  }
+  if (reste) yield reste;
+}
+
+(async () => {
+  let lignes, source = "", donneesDu = "";
+  if (process.argv[2]) { lignes = lignesDe(fs.createReadStream(process.argv[2])); source = process.argv[2]; donneesDu = new Date().toISOString().slice(0, 10); }
+  else {
+    const jeu = await (await fetch(JEU)).json();
+    const csv = jeu.resources.filter((r) => r.format === "csv" && !/dictionnaire/i.test(r.title));
+    const r = csv.find((x) => /quotidien/i.test(x.title)) || csv.sort((a, b) => String(b.last_modified).localeCompare(String(a.last_modified)))[0];
+    if (!r) throw new Error("Aucun fichier CSV dans le jeu de données du registre.");
+    const rep = await fetch(r.url);
+    if (!rep.ok) throw new Error(`Téléchargement impossible (HTTP ${rep.status}).`);
+    lignes = lignesDe(rep.body); source = r.url; donneesDu = String(r.last_modified || "").slice(0, 10);
+  }
+  const copros = await filtrer(lignes);
+  if (!copros.length) throw new Error("Aucune copropriété du cabinet trouvée : fichier publié sans données ou SIREN modifié ?");
+  const d = { donnees_du: donneesDu, source: "Registre national d'immatriculation des copropriétés (Anah, data.gouv.fr, Licence Ouverte)", fichier: source,
+    syndic: { siren: SIREN, etablissement: ETABLISSEMENT, departement: DEPARTEMENT }, copros };
+  fs.mkdirSync(path.dirname(SORTIE), { recursive: true });
+  fs.writeFileSync(SORTIE, `/* Généré par outils/registre.js : ne pas modifier à la main. */\nglobalThis.K_REGISTRE = ${JSON.stringify(d)};\n`);
+  console.log(`${copros.length} copropriété(s), données du ${donneesDu}.`);
+})().catch((e) => { console.error(e.message); process.exit(1); });
