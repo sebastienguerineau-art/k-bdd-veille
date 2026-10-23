@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "41 7 * * *"   # chaque jour vers 9 h 40 (heure de Paris), après la publication quotidienne sur data.gouv.fr
   workflow_dispatch: {}
+  push:                    # relancé dès que la liste des copropriétés suivies est modifiée
+    branches: [main]
+    paths: [registre/suivies.txt]
 
 permissions:
   contents: write

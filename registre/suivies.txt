@@ -1,0 +1,3 @@
+# Copropriétés à suivre en plus de celles de l'établissement de Rennes (autre établissement, autre syndic…).
+# Un numéro d'immatriculation par ligne (2 lettres + 7 chiffres), par exemple : AB1234567
+# Les lignes commençant par # sont ignorées. Le fichier est lu chaque matin par outils/registre.js.

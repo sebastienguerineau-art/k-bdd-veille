@@ -16,3 +16,5 @@ Chaque jour (GitHub Actions, vers 9 h 40 heure de Paris), `node outils/registre.
 (open data publié par l'Anah, Licence Ouverte) et n'en garde que les copropriétés gérées par l'établissement suivi
 (constantes en tête du script) : `registre/registre-copros.js`, lu par K-BDD (contrôle de la mise à jour annuelle, fin de mandat, lots).
 Il ne contient que des données déjà publiques du registre.
+Pour suivre d'autres copropriétés (autre établissement, autre syndic…), ajoutez leur n° d'immatriculation dans
+`registre/suivies.txt` (un par ligne) : l'extrait est régénéré aussitôt.

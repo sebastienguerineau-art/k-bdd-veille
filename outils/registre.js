@@ -11,6 +11,12 @@ const ETABLISSEMENT = "32665016500185"; // KERMARREC SYNDIC, établissement de R
 const DEPARTEMENT = "35";
 const JEU = "https://www.data.gouv.fr/api/1/datasets/registre-national-dimmatriculation-des-coproprietes/";
 const SORTIE = path.join(__dirname, "..", "registre", "registre-copros.js");
+// copropriétés suivies en plus (autre établissement, autre syndic…) : un n° d'immatriculation par ligne, # = commentaire
+const SUIVIES = path.join(__dirname, "..", "registre", "suivies.txt");
+const lireSuivies = () => {
+  if (!fs.existsSync(SUIVIES)) return new Set();
+  return new Set(fs.readFileSync(SUIVIES, "utf8").split(/\r?\n/).map((l) => l.replace(/#.*/, "").trim().toUpperCase()).filter((l) => /^[A-Z]{2}\d{7}$/.test(l)));
+};
 const CHAMPS = ["numero_immatriculation", "date_immatriculation", "date_derniere_maj", "mandat_en_cours", "date_fin_dernier_mandat",
   "nom_usage_copropriete", "numero_voie_adresse", "code_postal_adresse", "commune_adresse", "adresse_complementaire_1", "adresse_complementaire_2",
   "nombre_total_lots", "nombre_lots_habitation", "nombre_lots_stationnement", "periode_construction", "syndicat_principal_ou_secondaire",
@@ -31,15 +37,17 @@ const lireLigne = (l) => {
 };
 
 /** Lit le CSV ligne par ligne (flux) et garde les copropriétés du cabinet. */
-async function filtrer(lignes) {
+async function filtrer(lignes, suivies) {
   let entete = null; const copros = [];
   for await (const l of lignes) {
     if (!entete) { entete = lireLigne(l.replace(/^﻿/, "")); continue; }
-    if (!l.includes(SIREN)) continue; // filtre rapide avant le découpage
+    const numero = (l.match(/\b[A-Z]{2}\d{7}\b/) || [""])[0];
+    if (!l.includes(SIREN) && !suivies.has(numero)) continue; // filtre rapide avant le découpage
     const v = lireLigne(l), x = Object.fromEntries(entete.map((k, i) => [k, (v[i] || "").trim()]));
-    if (!x.siret_representant_legal.startsWith(SIREN)) continue;
-    if (x.siret_representant_legal !== ETABLISSEMENT && !String(x.code_postal_adresse).startsWith(DEPARTEMENT)) continue;
-    copros.push(Object.fromEntries(CHAMPS.map((k) => [k, x[k] || ""])));
+    const suivie = suivies.has(x.numero_immatriculation);
+    if (!suivie && !x.siret_representant_legal.startsWith(SIREN)) continue;
+    if (!suivie && x.siret_representant_legal !== ETABLISSEMENT && !String(x.code_postal_adresse).startsWith(DEPARTEMENT)) continue;
+    copros.push({ ...Object.fromEntries(CHAMPS.map((k) => [k, x[k] || ""])), ...(suivie ? { suivie: true } : {}) });
   }
   if (!entete || !entete.includes("numero_immatriculation")) throw new Error("Format du fichier du registre inattendu.");
   return copros.sort((a, b) => a.numero_immatriculation.localeCompare(b.numero_immatriculation));
@@ -66,11 +74,13 @@ async function* lignesDe(flux) {
     if (!rep.ok) throw new Error(`Téléchargement impossible (HTTP ${rep.status}).`);
     lignes = lignesDe(rep.body); source = r.url; donneesDu = String(r.last_modified || "").slice(0, 10);
   }
-  const copros = await filtrer(lignes);
+  const suivies = lireSuivies();
+  const copros = await filtrer(lignes, suivies);
+  const absentes = [...suivies].filter((n) => !copros.some((c) => c.numero_immatriculation === n));
   if (!copros.length) throw new Error("Aucune copropriété du cabinet trouvée : fichier publié sans données ou SIREN modifié ?");
   const d = { donnees_du: donneesDu, source: "Registre national d'immatriculation des copropriétés (Anah, data.gouv.fr, Licence Ouverte)", fichier: source,
-    syndic: { siren: SIREN, etablissement: ETABLISSEMENT, departement: DEPARTEMENT }, copros };
+    syndic: { siren: SIREN, etablissement: ETABLISSEMENT, departement: DEPARTEMENT }, suivies: [...suivies].sort(), introuvables: absentes, copros };
   fs.mkdirSync(path.dirname(SORTIE), { recursive: true });
   fs.writeFileSync(SORTIE, `/* Généré par outils/registre.js : ne pas modifier à la main. */\nglobalThis.K_REGISTRE = ${JSON.stringify(d)};\n`);
-  console.log(`${copros.length} copropriété(s), données du ${donneesDu}.`);
+  console.log(`${copros.length} copropriété(s), dont ${copros.filter((c) => c.suivie).length} suivie(s) en plus, données du ${donneesDu}.${absentes.length ? ` Introuvables : ${absentes.join(", ")}.` : ""}`);
 })().catch((e) => { console.error(e.message); process.exit(1); });
