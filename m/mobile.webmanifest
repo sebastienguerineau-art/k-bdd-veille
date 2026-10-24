@@ -1,0 +1,10 @@
+{
+  "name": "K-BDD consultation",
+  "short_name": "K-BDD",
+  "start_url": "mobile.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f5fb",
+  "theme_color": "#292d77",
+  "icons": [{ "src": "img/mobile-icone.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

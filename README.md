@@ -18,3 +18,9 @@ Chaque jour (GitHub Actions, vers 9 h 40 heure de Paris), `node outils/registre.
 Il ne contient que des données déjà publiques du registre.
 Pour suivre d'autres copropriétés (autre établissement, autre syndic…), ajoutez leur n° d'immatriculation dans
 `registre/suivies.txt` (un par ligne) : l'extrait est régénéré aussitôt.
+
+## Version mobile de consultation (`m/`)
+
+`m/` contient la version téléphone de K-BDD, publiée par GitHub Pages (`…/k-bdd-veille/m/`). Elle est générée et anonymisée
+par `outils/publier-mobile.py` du dépôt privé de l'application : aucune donnée de cabinet ni de copropriété. La base est
+chargée par chaque utilisateur depuis sa propre sauvegarde OneDrive et reste dans son téléphone.
