@@ -6,8 +6,9 @@
     --vert-clair: #173b29; --orange-clair: #3d2c12; --rouge-clair: #43201d; --info-clair: #1f2b4a; --vert: #7ed6a2; --orange: #f2b45c; --rouge: #ff8f85; }
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--fond); color: var(--encre);
+/* fond du « canevas » = couleur de la barre d'onglets : aucune bande d'une autre couleur sous la barre (iPhone en mode application) */
+html { -webkit-text-size-adjust: 100%; background: var(--blanc); }
+body { margin: 0; min-height: 100vh; min-height: 100dvh; font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--fond); color: var(--encre);
   padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
 a { color: var(--marine); text-decoration: none; }
 .m-tete { position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; gap: 10px;
@@ -17,6 +18,7 @@ a { color: var(--marine); text-decoration: none; }
 main { padding: 14px 16px; max-width: 720px; margin: 0 auto; }
 .m-onglets { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--blanc); border-top: 1px solid var(--bord); padding-bottom: env(safe-area-inset-bottom); }
+.m-onglets::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 120px; background: var(--blanc); } /* prolonge la barre jusqu'au bord de l'écran */
 .m-onglets a { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0 7px; font-size: 11.5px; color: var(--gris); }
 .m-onglets a span { font-size: 19px; line-height: 1; }
 .m-onglets a.actif { color: var(--marine); font-weight: 700; }
