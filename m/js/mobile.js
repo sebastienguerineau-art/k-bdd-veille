@@ -192,7 +192,7 @@
     const b = base();
     return `<h1 class="m-h1">Base</h1>
       ${b ? `<div class="m-carte">${ligne("Fichier", h(b.fichier))}${ligne("Sauvegarde du", h(b.fichier_du))}${ligne("Chargée le", h(b.charge_le))}${ligne("Copros", Object.keys(S.db.copros).length)}</div>` : ""}
-      <label class="m-bouton primaire">${b ? "Recharger depuis OneDrive" : "Charger la base depuis OneDrive"}<input type="file" id="m-fichier" accept=".json,application/json" hidden></label>
+      <label class="m-bouton primaire">${b ? "Recharger depuis OneDrive" : "Charger la base depuis OneDrive"}<input type="file" id="m-fichier" hidden></label>
       <p class="m-aide">Dans la fenêtre qui s'ouvre, choisissez <b>OneDrive</b> puis <b>BASE DE DONNÉES › K-BDD - sauvegarde.json</b>.
         Sur iPhone : « Parcourir » › OneDrive. Sur Android : menu ☰ › OneDrive.</p>
       <p class="m-aide">Consultation seule : rien n'est modifié ni envoyé. La base reste dans ce téléphone jusqu'à son effacement.</p>
