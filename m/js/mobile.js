@@ -371,7 +371,16 @@
   };
 
   // ------------------------------------------------------------------ routeur
-  const ONGLETS = [["", "Accueil", "⌂"], ["copros", "Copros", "▦"], ["agenda", "Agenda", "▤"], ["releves", "Relevés", "⊕"], ["base", "Base", "⇅"]];
+  /* icônes au trait (24 × 24, couleur du texte) */
+  const svg = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const ICONES = {
+    accueil: svg('<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/>'),
+    copros: svg('<rect x="4" y="3" width="11" height="18" rx="1.5"/><path d="M15 9h4a1 1 0 0 1 1 1v11"/><path d="M8 7h3M8 11h3M8 15h3M3 21h18"/>'),
+    agenda: svg('<rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M7.5 14h2M11 14h2M14.5 14h2M7.5 17.5h2M11 17.5h2"/>'),
+    releves: svg('<path d="M4.5 18a9 9 0 1 1 15 0"/><path d="M12 13.5 15.5 9"/><circle cx="12" cy="14" r="1.6"/><path d="M8 21h8"/>'),
+    base: svg('<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4 4 0 0 1 .5 7.97"/><path d="M12 11v9M9 17l3 3 3-3"/>'),
+  };
+  const ONGLETS = [["", "Accueil", ICONES.accueil], ["copros", "Copros", ICONES.copros], ["agenda", "Agenda", ICONES.agenda], ["releves", "Relevés", ICONES.releves], ["base", "Base", ICONES.base]];
   const route = () => {
     const [chemin, q] = (location.hash.slice(2) || "").split("?");
     const [page, arg] = chemin.split("/");

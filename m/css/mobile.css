@@ -19,8 +19,11 @@ main { padding: 14px 16px; max-width: 720px; margin: 0 auto; }
 .m-onglets { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--blanc); border-top: 1px solid var(--bord); padding-bottom: env(safe-area-inset-bottom); }
 .m-onglets::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 120px; background: var(--blanc); } /* prolonge la barre jusqu'au bord de l'écran */
-.m-onglets a { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 11px 0 10px; font-size: 13.5px; color: var(--gris); }
-.m-onglets a span { font-size: 25px; line-height: 1; }
+.m-onglets a { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 8px; font-size: 13px; color: var(--gris); }
+.m-onglets a span { display: grid; place-items: center; width: 56px; height: 32px; border-radius: 16px; transition: background .2s; }
+.m-onglets a svg { width: 25px; height: 25px; }
+.m-onglets a.actif span { background: #e4e6f7; }
+.m-onglets a.actif svg { stroke-width: 2.3; }
 .m-onglets a.actif { color: var(--marine); font-weight: 700; }
 .m-h1 { font-size: 21px; margin: 4px 0 6px; color: var(--marine); }
 .m-h2 { font-size: 15px; margin: 18px 0 6px; color: var(--gris); text-transform: uppercase; letter-spacing: .06em; }
