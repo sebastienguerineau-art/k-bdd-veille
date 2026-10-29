@@ -371,7 +371,7 @@
   };
 
   // ------------------------------------------------------------------ routeur
-  const ONGLETS = [["", "Accueil", "⌂"], ["copros", "Copros", "▦"], ["agenda", "Agenda", "▤"], ["releves", "Relevés", "⊕"], ["veille", "Veille", "✎"], ["base", "Base", "⇅"]];
+  const ONGLETS = [["", "Accueil", "⌂"], ["copros", "Copros", "▦"], ["agenda", "Agenda", "▤"], ["releves", "Relevés", "⊕"], ["base", "Base", "⇅"]];
   const route = () => {
     const [chemin, q] = (location.hash.slice(2) || "").split("?");
     const [page, arg] = chemin.split("/");
