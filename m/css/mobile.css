@@ -3,7 +3,7 @@
   --vert: #1d7a46; --vert-clair: #e3f4ea; --orange: #a35a00; --orange-clair: #fdf0dc; --rouge: #b42318; --rouge-clair: #fde8e6; --info-clair: #e8f1fb; }
 @media (prefers-color-scheme: dark) {
   :root { --fond: #14162b; --blanc: #1e2140; --encre: #e7e9f6; --gris: #a3a8c3; --bord: #2f3360; --marine: #c9cdf5; --marine-clair: #aab0ee;
-    --vert-clair: #173b29; --orange-clair: #3d2c12; --rouge-clair: #43201d; --info-clair: #1f2b4a; --vert: #7ed6a2; --orange: #f2b45c; --rouge: #ff8f85; }
+    --vert-clair: #173b29; --orange-clair: #3d2c12; --rouge-clair: #43201d; --info-clair: #1f2b4a; --vert: #7ed6a2; --orange: #f2b45c; --rouge: #ff8f85; --onglet-actif: #3a4190; }
 }
 * { box-sizing: border-box; }
 /* fond du « canevas » = couleur de la barre d'onglets : aucune bande d'une autre couleur sous la barre (iPhone en mode application) */
@@ -22,7 +22,7 @@ main { padding: 14px 16px; max-width: 720px; margin: 0 auto; }
 .m-onglets a { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 8px; font-size: 13px; color: var(--gris); }
 .m-onglets a span { display: grid; place-items: center; width: 56px; height: 32px; border-radius: 16px; transition: background .2s; }
 .m-onglets a svg { width: 25px; height: 25px; }
-.m-onglets a.actif span { background: #e4e6f7; }
+.m-onglets a.actif span { background: var(--onglet-actif, #e4e6f7); }
 .m-onglets a.actif svg { stroke-width: 2.3; }
 .m-onglets a.actif { color: var(--marine); font-weight: 700; }
 .m-h1 { font-size: 21px; margin: 4px 0 6px; color: var(--marine); }
