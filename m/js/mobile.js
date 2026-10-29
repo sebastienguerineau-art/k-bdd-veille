@@ -245,30 +245,36 @@
     }
     return res;
   };
+  /** Conso du relevé saisi (depuis le dernier relevé connu), ou null. */
+  const consoSaisie = (x, b) => {
+    const d = M.dernierReleve(x), i = nombre(b.index), af = b.remplace ? nombre(b.ancien_final) : null;
+    return d && i !== null ? (af !== null ? af - d.index + i : i - d.index) : null;
+  };
+  const infoConso = (x, b) => { const k = consoSaisie(x, b); return k === null || k < 0 ? "" : `+ ${U.nombre(k, 0)} kWh`; };
+  const saisi = (b) => b.index !== "" && b.index !== undefined && !b.envoye_le;
   const vueReleves = () => {
-    const liste = coprosAvecSc(), prets = Object.values(brouillons).filter((b) => b.index !== "" && b.index !== undefined && !b.envoye_le);
-    const envoyes = Object.values(brouillons).filter((b) => b.envoye_le);
+    const liste = coprosAvecSc(), prets = Object.values(brouillons).filter(saisi), envoyes = Object.values(brouillons).filter((b) => b.envoye_le);
+    const total = liste.reduce((t, c) => t + c.sous_compteurs.length, 0);
     const carte = (c, x) => {
-      const cle = `${c.numero}|${x.id}`, b = brouillons[cle] || {}, d = M.dernierReleve(x), al = alertesReleve(x, b);
-      return `<div class="m-carte m-releve ${b.envoye_le ? "envoye" : ""}" data-releve="${h(cle)}">
-        <div class="m-releve-tete"><b>${h(x.nom)}</b>${x.emplacement ? `<small>${h(x.emplacement)}</small>` : ""}</div>
-        <div class="m-muted petit">Dernier relevé : ${d ? `<b>${U.nombre(d.index, 0)}</b> le ${U.jjmmaaaa(d.date) || d.exercice}` : "aucun"}</div>
-        <div class="m-releve-saisie">
-          <label>Index<input type="text" inputmode="decimal" data-r="index" value="${h(b.index ?? "")}" placeholder="${d ? U.nombre(d.index, 0) : "index"}"></label>
-          <label>Date<input type="date" data-r="date" value="${h(b.date || U.aujourdhui())}"></label></div>
-        <label class="m-case"><input type="checkbox" data-r="remplace" ${b.remplace ? "checked" : ""}> Compteur remplacé</label>
-        ${b.remplace ? `<label class="m-releve-af">Index final de l'ancien compteur<input type="text" inputmode="decimal" data-r="ancien_final" value="${h(b.ancien_final ?? "")}"></label>` : ""}
-        <div class="m-releve-photo">${b.photo ? `<img src="${b.photo}" alt="Photo du compteur">` : ""}
-          <label class="m-bouton petit">${b.photo ? "Reprendre la photo" : "📷 Photo du compteur"}<input type="file" accept="image/*" capture="environment" data-r="photo" hidden></label></div>
-        ${al.length ? `<ul class="m-puces">${al.map((a) => `<li class="m-alerte">⚠ ${h(a)}</li>`).join("")}</ul>` : ""}
-        ${b.envoye_le ? `<p class="m-muted petit">Envoyé le ${h(b.envoye_le)}</p>` : ""}</div>`;
+      const cle = `${c.numero}|${x.id}`, b = brouillons[cle] || {}, d = M.dernierReleve(x), al = alertesReleve(x, b), date = b.date || U.aujourdhui();
+      return `<div class="m-releve ${b.envoye_le ? "envoye" : saisi(b) ? "fait" : ""}" data-releve="${h(cle)}">
+        <div class="mr-tete"><div class="mr-nom"><b>${h(x.nom)}</b>${x.emplacement ? `<small>${h(x.emplacement)}</small>` : ""}</div>
+          <div class="mr-prec">${d ? `<small>dernier</small><b>${U.nombre(d.index, 0)}</b><small>${U.jjmmaaaa(d.date) || h(d.exercice)}</small>` : "<small>aucun relevé</small>"}</div></div>
+        <div class="mr-saisie"><input type="text" inputmode="decimal" data-r="index" value="${h(b.index ?? "")}" placeholder="Nouvel index" aria-label="Nouvel index">
+          <label class="mr-photo" title="Photo du compteur">${b.photo ? `<img src="${b.photo}" alt="Photo du compteur">` : "📷"}<input type="file" accept="image/*" capture="environment" data-r="photo" hidden></label></div>
+        <div class="mr-infos"><span class="mr-conso">${infoConso(x, b)}</span>
+          <label class="mr-date">le <span>${U.jjmmaaaa(date)}</span> ✎<input type="date" data-r="date" value="${h(date)}" aria-label="Date du relevé"></label>
+          <label class="mr-lien"><input type="checkbox" data-r="remplace" ${b.remplace ? "checked" : ""}>${b.remplace ? "remplacé ✓" : "remplacé ?"}</label></div>
+        ${b.remplace ? `<input type="text" inputmode="decimal" class="mr-af" data-r="ancien_final" value="${h(b.ancien_final ?? "")}" placeholder="Index final de l'ancien compteur">` : ""}
+        <ul class="m-puces">${al.map((a) => `<li class="m-alerte">⚠ ${h(a)}</li>`).join("")}</ul>
+        ${b.envoye_le ? `<div class="mr-envoye">envoyé le ${h(b.envoye_le)}</div>` : ""}</div>`;
     };
-    return `<h1 class="m-h1">Relevés des sous-compteurs</h1>
-      <p class="m-sous">Saisis sur ce téléphone (même sans réseau), puis envoyés dans OneDrive : RESSOURCES › RELEVÉS. Le PC les intègre après votre validation.</p>
+    return `<div class="mr-entete"><h1 class="m-h1">Relevés</h1><span class="mr-compte" id="mr-compte">${prets.length} / ${total} saisi${prets.length > 1 ? "s" : ""}</span></div>
       ${liste.length ? liste.map((c) => `<h2 class="m-h2">${h(c.numero)} ${h(c.nom)}</h2>${c.sous_compteurs.map((x) => carte(c, x)).join("")}`).join("")
         : '<p class="m-muted">Aucun sous-compteur dans la base chargée.</p>'}
-      <div class="m-envoi"><button class="m-bouton primaire" id="m-envoyer" ${prets.length ? "" : "disabled"}>Envoyer ${prets.length} relevé${prets.length > 1 ? "s" : ""}</button>
-        ${envoyes.length ? `<button class="m-bouton" id="m-vider">Effacer les ${envoyes.length} relevé${envoyes.length > 1 ? "s" : ""} déjà envoyé${envoyes.length > 1 ? "s" : ""}</button>` : ""}</div>`;
+      <p class="m-aide">Gardés sur ce téléphone, même sans réseau. « Envoyer » crée un fichier à ranger dans OneDrive › BASE DE DONNÉES › RESSOURCES › RELEVÉS ; le PC les intègre après validation.</p>
+      ${envoyes.length ? `<button class="m-bouton" id="m-vider">Effacer les ${envoyes.length} relevé${envoyes.length > 1 ? "s" : ""} déjà envoyé${envoyes.length > 1 ? "s" : ""}</button>` : ""}
+      <button class="mr-envoyer" id="m-envoyer" ${prets.length ? "" : "hidden"}>Envoyer ${prets.length} relevé${prets.length > 1 ? "s" : ""}</button>`;
   };
   /** Photo réduite (1280 px, JPEG) : environ 200 Ko. */
   const reduirePhoto = (fichier) => new Promise((ok, ko) => {
@@ -290,11 +296,13 @@
         brouillons[cle] = { ...(brouillons[cle] || { date: U.aujourdhui() }), copro, sous_compteur: x.id, nom: x.nom, ...champs, envoye_le: "" };
         await ecrireBrouillons(brouillons);
         if (reafficher) return afficher();
-        const al = alertesReleve(x, brouillons[cle]);
-        let ul = $(".m-puces", carte); // alertes de la carte mises à jour sans réafficher (le clavier reste ouvert)
-        if (!ul && al.length) { ul = document.createElement("ul"); ul.className = "m-puces"; $(".m-releve-photo", carte).after(ul); }
-        if (ul) ul.innerHTML = al.map((a) => `<li class="m-alerte">⚠ ${h(a)}</li>`).join("");
-        message(al.length ? `⚠ ${al[0]}` : "Relevé enregistré sur ce téléphone.", !!al.length); majBoutonEnvoi();
+        // carte mise à jour sans réafficher (le clavier reste ouvert) : conso, alertes, date, état
+        const b = brouillons[cle], al = alertesReleve(x, b);
+        $(".mr-conso", carte).textContent = infoConso(x, b);
+        $(".m-puces", carte).innerHTML = al.map((a) => `<li class="m-alerte">⚠ ${h(a)}</li>`).join("");
+        $(".mr-date span", carte).textContent = U.jjmmaaaa(b.date || U.aujourdhui());
+        carte.classList.toggle("fait", saisi(b));
+        majBoutonEnvoi();
       };
       $$("[data-r]", carte).forEach((ch) => ch.addEventListener("change", async () => {
         const k = ch.dataset.r;
@@ -313,8 +321,9 @@
     });
   };
   const majBoutonEnvoi = () => {
-    const n = Object.values(brouillons).filter((b) => b.index !== "" && b.index !== undefined && !b.envoye_le).length, bt = $("#m-envoyer");
-    if (bt) { bt.disabled = !n; bt.textContent = `Envoyer ${n} relevé${n > 1 ? "s" : ""}`; }
+    const n = Object.values(brouillons).filter(saisi).length, bt = $("#m-envoyer"), cpt = $("#mr-compte");
+    if (bt) { bt.hidden = !n; bt.textContent = `Envoyer ${n} relevé${n > 1 ? "s" : ""}`; }
+    if (cpt) cpt.textContent = cpt.textContent.replace(/^\d+/, n).replace(/saisis?$/, n > 1 ? "saisis" : "saisi");
   };
   /** Fichier de relevés : partagé (iPhone : « Enregistrer dans Fichiers » › OneDrive › BASE DE DONNÉES › RESSOURCES › RELEVÉS), sinon téléchargé. */
   const envoyerReleves = async () => {
