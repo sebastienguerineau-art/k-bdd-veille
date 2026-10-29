@@ -374,6 +374,11 @@
     S.dossier = null; // jamais d'écriture dans un dossier depuis le téléphone
     window.addEventListener("hashchange", afficher);
     afficher();
-    if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw-mobile.js").catch(() => {});
+    if ("serviceWorker" in navigator && location.protocol === "https:") {
+      navigator.serviceWorker.register("sw-mobile.js").then((r) => r.update()).catch(() => {});
+      // nouvelle version installée : rechargement une fois pour l'afficher tout de suite
+      let recharge = false; const deja = !!navigator.serviceWorker.controller; // pas de rechargement à la toute première installation
+      navigator.serviceWorker.addEventListener("controllerchange", () => { if (deja && !recharge) { recharge = true; location.reload(); } });
+    }
   })();
 })(globalThis.K = globalThis.K || {});
