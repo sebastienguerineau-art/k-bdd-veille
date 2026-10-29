@@ -132,6 +132,14 @@
     cache = { ref: f.lignes, lignes, parCompte, d0, f0 };
     return cache;
   };
+  /** Factures EDF datées dans la période (comme en compta), sans complément par les synthèses annuelles :
+      {kwh, ttc, n, du, au} — n factures, du/au : première et dernière date de facture retenues. */
+  M.facturesEdfPeriode = (comptes, debut, fin) => {
+    const c = facturesElec(), d0 = jour(debut), f0 = jour(fin) + 1;
+    const lignes = c ? [...new Set(comptes.map(sansZeros))].flatMap((z) => c.parCompte[z] || []).filter((x) => x.j >= d0 && x.j < f0) : [];
+    const dates = lignes.map((x) => x.df).sort();
+    return { kwh: Math.round(lignes.reduce((t, x) => t + (x.k || 0), 0)), ttc: U.arrondi(lignes.reduce((t, x) => t + (x.t || 0), 0), 2), n: lignes.length, du: dates[0] || "", au: dates[dates.length - 1] || "" };
+  };
   M.etendueFactures = () => { const c = facturesElec(); return c ? { du: isoJour(c.d0), au: isoJour(c.f0 - 1) } : {}; };
   /** Somme des factures émises dans [d0, f0[. */
   const sommer = (lignes, d0, f0, champ) => lignes.reduce((t, x) => (x.j >= d0 && x.j < f0 ? t + x[champ] : t), 0);
@@ -624,7 +632,7 @@
     res.conso = U.arrondi(r.ancien_final !== undefined ? r.ancien_final - p.index + r.index : r.index - p.index, 2);
     if (res.conso < 0) return { ...res, statut: "index_incoherent" };
     const comptes = x.pdl ? comptesDuPdl(c, x.pdl) : [];
-    const edf = comptes.length ? M.consoEdfPeriode(comptes, exo.debut, exo.fin) : null;
+    const edf = comptes.length ? M.facturesEdfPeriode(comptes, exo.debut, exo.fin) : null; // coût moyen : factures EDF de l'exercice seulement
     res.edf = edf;
     if (!edf || !edf.kwh || !edf.ttc) return { ...res, statut: "sans_edf" };
     res.prix = edf.ttc / edf.kwh;
