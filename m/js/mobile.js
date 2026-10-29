@@ -252,12 +252,27 @@
   };
   const infoConso = (x, b) => { const k = consoSaisie(x, b); return k === null || k < 0 ? "" : `+ ${U.nombre(k, 0)} kWh`; };
   const saisi = (b) => b.index !== "" && b.index !== undefined && !b.envoye_le;
+  /** Clôture à relever d'une copro (la plus proche d'aujourd'hui, comme à l'intégration sur le PC) et sous-compteurs sans relevé pour elle. */
+  const aRelever = (c) => {
+    const { exo } = M.exercicePourReleve(c, U.aujourdhui());
+    return { exo, manquants: c.sous_compteurs.filter((x) => !(x.releves || {})[exo.libelle]) };
+  };
   const vueReleves = () => {
-    const liste = coprosAvecSc(), prets = Object.values(brouillons).filter(saisi), envoyes = Object.values(brouillons).filter((b) => b.envoye_le);
-    const total = liste.reduce((t, c) => t + c.sous_compteurs.length, 0);
+    const toutes = coprosAvecSc(), dansPf = toutes.filter((c) => M.dansPortefeuille(c, portefeuille()));
+    const candidates = (dansPf.length ? dansPf : toutes).map((c) => ({ c, ...aRelever(c) }))
+      .sort((a, b) => (b.manquants.length > 0) - (a.manquants.length > 0) || a.exo.fin.localeCompare(b.exo.fin) || a.c.numero.localeCompare(b.c.numero));
+    const choix = memo.get("releves.copro"), tous = memo.get("releves.tous") === true;
+    const sel = candidates.find((k) => k.c.numero === choix) || candidates.find((k) => k.manquants.length) || candidates[0];
+    const liste = sel ? [sel.c] : [], prets = Object.values(brouillons).filter(saisi), envoyes = Object.values(brouillons).filter((b) => b.envoye_le);
+    const encours = (c, x) => { const b = brouillons[`${c.numero}|${x.id}`]; return b && (saisi(b) || b.envoye_le); };
+    const montrer = sel ? sel.c.sous_compteurs.filter((x) => tous || sel.manquants.includes(x) || encours(sel.c, x)) : [];
+    const total = sel ? sel.manquants.length : 0, faits = sel ? sel.manquants.filter((x) => encours(sel.c, x)).length : 0;
+    const option = (k) => `<option value="${h(k.c.numero)}" ${k === sel ? "selected" : ""}>${h(k.c.numero)} ${h(k.c.nom)} · ${k.manquants.length ? `${k.manquants.length} à relever` : "à jour"}</option>`;
     const carte = (c, x) => {
       const cle = `${c.numero}|${x.id}`, b = brouillons[cle] || {}, d = M.dernierReleve(x), al = alertesReleve(x, b), date = b.date || U.aujourdhui();
-      return `<div class="m-releve ${b.envoye_le ? "envoye" : saisi(b) ? "fait" : ""}" data-releve="${h(cle)}">
+      const deja = sel && !sel.manquants.includes(x);
+      return `<div class="m-releve ${b.envoye_le ? "envoye" : saisi(b) ? "fait" : ""} ${deja ? "deja" : ""}" data-releve="${h(cle)}">
+        ${deja ? `<div class="mr-deja">déjà relevé pour cette clôture</div>` : ""}
         <div class="mr-tete"><div class="mr-nom"><b>${h(x.nom)}</b>${x.emplacement ? `<small>${h(x.emplacement)}</small>` : ""}</div>
           <div class="mr-prec">${d ? `<small>dernier</small><b>${U.nombre(d.index, 0)}</b><small>${U.jjmmaaaa(d.date) || h(d.exercice)}</small>` : "<small>aucun relevé</small>"}</div></div>
         <div class="mr-saisie"><input type="text" inputmode="decimal" data-r="index" value="${h(b.index ?? "")}" placeholder="Nouvel index" aria-label="Nouvel index">
@@ -269,9 +284,15 @@
         <ul class="m-puces">${al.map((a) => `<li class="m-alerte">⚠ ${h(a)}</li>`).join("")}</ul>
         ${b.envoye_le ? `<div class="mr-envoye">envoyé le ${h(b.envoye_le)}</div>` : ""}</div>`;
     };
-    return `<div class="mr-entete"><h1 class="m-h1">Relevés</h1><span class="mr-compte" id="mr-compte">${prets.length} / ${total} saisi${prets.length > 1 ? "s" : ""}</span></div>
-      ${liste.length ? liste.map((c) => `<h2 class="m-h2">${h(c.numero)} ${h(c.nom)}</h2>${c.sous_compteurs.map((x) => carte(c, x)).join("")}`).join("")
-        : '<p class="m-muted">Aucun sous-compteur dans la base chargée.</p>'}
+    if (!sel) return '<h1 class="m-h1">Relevés</h1><p class="m-muted">Aucun sous-compteur dans la base chargée.</p>';
+    const cachés = sel.c.sous_compteurs.length - montrer.length;
+    return `<div class="mr-entete"><h1 class="m-h1">Relevés</h1><span class="mr-compte" id="mr-compte">${faits} / ${total} saisi${faits > 1 ? "s" : ""}</span></div>
+      <label class="m-pf"><select id="mr-copro" aria-label="Copro">${candidates.map(option).join("")}</select></label>
+      <p class="mr-cloture">Clôture du <b>${U.jjmmaaaa(sel.exo.fin)}</b> (exercice ${h(sel.exo.libelle)})</p>
+      ${liste.map((c) => montrer.map((x) => carte(c, x)).join("")).join("")}
+      ${!montrer.length ? `<p class="m-vide-ok">✓ Tous les sous-compteurs sont relevés pour cette clôture.</p>` : ""}
+      ${cachés || tous ? `<button class="m-bouton" id="mr-tous">${tous ? "Masquer les déjà relevés" : `Voir aussi les déjà relevés (${cachés})`}</button>` : ""}
+      ${prets.some((b) => b.copro !== sel.c.numero) ? `<p class="m-aide">D'autres copros ont aussi des relevés saisis : ils partiront avec le même envoi.</p>` : ""}
       <p class="m-aide">Gardés sur ce téléphone, même sans réseau. « Envoyer » crée un fichier à ranger dans OneDrive › BASE DE DONNÉES › RESSOURCES › RELEVÉS ; le PC les intègre après validation.</p>
       ${envoyes.length ? `<button class="m-bouton" id="m-vider">Effacer les ${envoyes.length} relevé${envoyes.length > 1 ? "s" : ""} déjà envoyé${envoyes.length > 1 ? "s" : ""}</button>` : ""}
       <button class="mr-envoyer" id="m-envoyer" ${prets.length ? "" : "hidden"}>Envoyer ${prets.length} relevé${prets.length > 1 ? "s" : ""}</button>`;
@@ -311,6 +332,10 @@
         await maj({ [k]: ch.value.trim() }, false);
       }));
     });
+    const copro = $("#mr-copro");
+    if (copro) copro.addEventListener("change", () => { memo.set("releves.copro", copro.value); afficher(); });
+    const tous = $("#mr-tous");
+    if (tous) tous.addEventListener("click", () => { memo.set("releves.tous", memo.get("releves.tous") !== true); afficher(); });
     const envoi = $("#m-envoyer");
     if (envoi) envoi.addEventListener("click", envoyerReleves);
     const vider = $("#m-vider");
@@ -323,7 +348,7 @@
   const majBoutonEnvoi = () => {
     const n = Object.values(brouillons).filter(saisi).length, bt = $("#m-envoyer"), cpt = $("#mr-compte");
     if (bt) { bt.hidden = !n; bt.textContent = `Envoyer ${n} relevé${n > 1 ? "s" : ""}`; }
-    if (cpt) cpt.textContent = cpt.textContent.replace(/^\d+/, n).replace(/saisis?$/, n > 1 ? "saisis" : "saisi");
+    if (cpt) { const f = $$(".m-releve.fait, .m-releve.envoye").filter((c) => !c.classList.contains("deja")).length; cpt.textContent = cpt.textContent.replace(/^\d+/, f).replace(/saisis?$/, f > 1 ? "saisis" : "saisi"); }
   };
   /** Fichier de relevés : partagé (iPhone : « Enregistrer dans Fichiers » › OneDrive › BASE DE DONNÉES › RESSOURCES › RELEVÉS), sinon téléchargé. */
   const envoyerReleves = async () => {
