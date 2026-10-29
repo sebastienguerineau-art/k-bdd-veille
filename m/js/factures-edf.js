@@ -552,7 +552,7 @@
       au coût moyen complet du kWh (TTC ÷ kWh, abonnement et taxes compris) du PDL principal sur l'exercice. */
   M.TODO_SOUS_COMPTEURS = "Relever les sous-compteurs électriques";
   M.STATUTS_SOUS_COMPTEUR = { a_relever: "à relever", index_initial: "index de départ", index_incoherent: "index incohérent", sans_edf: "factures EDF manquantes",
-    sans_extraction: "extraction à importer", a_passer: "écriture à passer", passee: "écriture passée", ecart: "écart" };
+    sans_extraction: "extraction à importer", a_passer: "écriture à passer", passee: "écriture passée", ecart: "écart", meme_poste: "même compte : non contrôlable" };
   M.sousCompteurs = (c) => (c && c.sous_compteurs) || [];
   const champsSousCompteur = ["nom", "emplacement", "pdl", "depart", "arrivee"];
   const pdlParRae = (c) => new Map(M.pdlCopro(c).pdl.map((p) => [p.rae, p]));
@@ -578,7 +578,6 @@
   };
   const verifierSousCompteur = (x) => {
     if (!x.nom) throw new Error("Donnez un nom au sous-compteur.");
-    if (x.depart && x.depart === x.arrivee) throw new Error("L'arrivée doit différer du départ : autre compte, ou même compte sous une autre clé de répartition.");
   };
   M.ajouterSousCompteur = (c, champs) => {
     const x = { id: S.nouvelId(), nom: "", emplacement: "", pdl: "", depart: "", arrivee: "", releves: {}, cree_le: U.aujourdhui() };
@@ -649,20 +648,21 @@
       return U.arrondi(v, 2);
     };
     const flux = {};
-    for (const l of calc) if (l.statut === "calcule" && l.x.depart && l.x.arrivee) {
+    for (const l of calc) if (l.statut === "calcule" && l.x.depart && l.x.arrivee && l.x.depart !== l.x.arrivee) {
       flux[l.x.depart] = (flux[l.x.depart] || 0) - l.montant; flux[l.x.arrivee] = (flux[l.x.arrivee] || 0) + l.montant;
     }
     const etat = (k) => { const avant = initial(k); return { compte: k, avant, apres: U.arrondi(avant + (flux[k] || 0), 2), reel: reel(k), present: !!(b && b.lignes.some((l) => dansPoste(k, l.compte, l.cle))) }; };
     const lignes = calc.map((l) => {
       if (l.statut !== "calcule") return l;
       if (!l.x.depart || !l.x.arrivee) return { ...l, statut: "a_passer", incomplet: true };
+      if (l.x.depart === l.x.arrivee) return { ...l, statut: "meme_poste" }; // débit et crédit du même compte : solde inchangé, rien à contrôler
       if (!b) return { ...l, statut: "sans_extraction" };
       const d = etat(l.x.depart), a = etat(l.x.arrivee);
       const tol = Math.max(2, Math.abs(d.avant) * 0.005), pres = (e, v) => Math.abs(e.reel - v) <= tol;
       const statut = pres(d, d.apres) && pres(a, a.apres) ? "passee" : pres(d, d.avant) && pres(a, a.avant) ? "a_passer" : "ecart";
       return { ...l, statut, depart: d, arrivee: a, passe_estime: U.arrondi(a.reel - a.avant, 2) /* reçu par le poste d'arrivée (le départ peut être commun à plusieurs sous-compteurs) */ };
     });
-    const ok = lignes.every((l) => l.statut === "passee" || l.statut === "index_initial");
+    const ok = lignes.every((l) => ["passee", "index_initial", "meme_poste"].includes(l.statut));
     return { exercice: exo.libelle, extraction: !!b, lignes, ok };
   };
   /** Tâche « Relever les sous-compteurs » : cochée si et seulement si le contrôle des écritures de l'exercice est bon. */
