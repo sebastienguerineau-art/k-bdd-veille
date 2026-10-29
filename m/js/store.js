@@ -171,6 +171,8 @@
     // dates d'exercice des extractions au format AAAA-MM-JJ (une date « 30/06/2023 » fausse les tris et les périodes)
     for (const b of Object.values(S.db.budgets || {})) for (const k of ["date_debut", "date_fin"]) if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(b[k] || "")) b[k] = U.dateFr(b[k]);
     if (!S.db.todos) S.db.todos = {};
+    // tâche des sous-compteurs : électricité et eau
+    for (const l of Object.values(S.db.todos)) for (const t of l || []) if (t.process === "sous_compteurs" && t.texte === "Relever les sous-compteurs électriques") t.texte = "Relever les sous-compteurs";
     if (!S.db.rappro_justifs) S.db.rappro_justifs = {};
     if (!S.db.rappro_justifs_copro) S.db.rappro_justifs_copro = {};
     S.db.bilan = Object.assign({ balances: {}, historique: {}, justifs: {}, journal: [] }, S.db.bilan);

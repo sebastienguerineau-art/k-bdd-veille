@@ -241,7 +241,7 @@
     if (d && i !== null) {
       const conso = af !== null ? af - d.index + i : i - d.index, an = consoPrecedente(x);
       if (conso < 0) res.push(`index inférieur au dernier relevé (${U.nombre(d.index, 0)}) : compteur remplacé ?`);
-      else if (an && conso > 2 * an) res.push(`conso ${U.nombre(conso, 0)} kWh : plus du double de l'an dernier (${U.nombre(an, 0)})`);
+      else if (an && conso > 2 * an) res.push(`conso ${U.nombre(conso, 0)} ${M.uniteSc(x)} : plus du double de l'an dernier (${U.nombre(an, 0)})`);
     }
     return res;
   };
@@ -250,7 +250,7 @@
     const d = M.dernierReleve(x), i = nombre(b.index), af = b.remplace ? nombre(b.ancien_final) : null;
     return d && i !== null ? (af !== null ? af - d.index + i : i - d.index) : null;
   };
-  const infoConso = (x, b) => { const k = consoSaisie(x, b); return k === null || k < 0 ? "" : `+ ${U.nombre(k, 0)} kWh`; };
+  const infoConso = (x, b) => { const k = consoSaisie(x, b); return k === null || k < 0 ? "" : `+ ${U.nombre(k, 0)} ${M.uniteSc(x)}`; };
   const saisi = (b) => b.index !== "" && b.index !== undefined && !b.envoye_le;
   /** Clôture à relever d'une copro (la plus proche d'aujourd'hui, comme à l'intégration sur le PC) et sous-compteurs sans relevé pour elle. */
   const aRelever = (c) => {
@@ -273,7 +273,7 @@
       const deja = sel && !sel.manquants.includes(x);
       return `<div class="m-releve ${b.envoye_le ? "envoye" : saisi(b) ? "fait" : ""} ${deja ? "deja" : ""}" data-releve="${h(cle)}">
         ${deja ? `<div class="mr-deja">déjà relevé pour cette clôture</div>` : ""}
-        <div class="mr-tete"><div class="mr-nom"><b>${h(x.nom)}</b>${x.emplacement ? `<small>${h(x.emplacement)}</small>` : ""}</div>
+        <div class="mr-tete"><div class="mr-nom"><b><span class="mr-type">${M.TYPES_SOUS_COMPTEUR[M.typeSc(x)].icone}</span> ${h(x.nom)}</b>${x.emplacement ? `<small>${h(x.emplacement)}</small>` : ""}</div>
           <div class="mr-prec">${d ? `<small>dernier</small><b>${U.nombre(d.index, 0)}</b><small>${U.jjmmaaaa(d.date) || h(d.exercice)}</small>` : "<small>aucun relevé</small>"}</div></div>
         <div class="mr-saisie"><input type="text" inputmode="decimal" data-r="index" value="${h(b.index ?? "")}" placeholder="Nouvel index" aria-label="Nouvel index">
           <label class="mr-photo" title="Photo du compteur">${b.photo ? `<img src="${b.photo}" alt="Photo du compteur">` : "📷"}<input type="file" accept="image/*" capture="environment" data-r="photo" hidden></label></div>

@@ -554,15 +554,27 @@
   M.definirPdlConsoPv = (numero, rae) => { M.majProcess(S.copro(numero), "pv_sbm", { pdl_conso: String(rae || "").trim() }); };
   M.definirCompteInjection = (numero, compte) => { M.majProcess(S.copro(numero), "pv_sbm", { compte_vente: String(compte || "").trim() }); };
 
-  // ------------------------------------------------------------------ sous-compteurs électriques
-  /** Sous-compteurs d'une copro : {id, nom, emplacement, pdl, depart, arrivee, releves: {exercice: {date, index, ancien_final}}}.
-      Relevé à chaque clôture ; conso = index N − index N-1, refacturée du compte de départ vers le compte d'arrivée
-      au coût moyen complet du kWh (TTC ÷ kWh, abonnement et taxes compris) du PDL principal sur l'exercice. */
-  M.TODO_SOUS_COMPTEURS = "Relever les sous-compteurs électriques";
-  M.STATUTS_SOUS_COMPTEUR = { a_relever: "à relever", index_initial: "index de départ", index_incoherent: "index incohérent", sans_edf: "factures EDF manquantes",
+  // ------------------------------------------------------------------ sous-compteurs (électricité et eau)
+  /** Sous-compteurs d'une copro : {id, type, nom, emplacement, pdl, depart, arrivee, releves: {exercice: {date, index, ancien_final}}}.
+      Relevé à chaque clôture ; conso = index N − index N-1, refacturée du compte de départ vers le compte d'arrivée au coût moyen complet :
+      électricité (type « elec ») : TTC ÷ kWh des factures EDF du PDL principal datées dans l'exercice ;
+      eau (type « eau ») : TTC ÷ m³ des factures d'eau de l'exercice, saisis pour la copro (c.factures_eau[exercice] = {ttc, m3}). */
+  M.TODO_SOUS_COMPTEURS = "Relever les sous-compteurs";
+  M.TYPES_SOUS_COMPTEUR = { elec: { libelle: "Électricité", unite: "kWh", icone: "⚡" }, eau: { libelle: "Eau", unite: "m³", icone: "💧" } };
+  M.typeSc = (x) => (x && x.type === "eau" ? "eau" : "elec");
+  M.uniteSc = (x) => M.TYPES_SOUS_COMPTEUR[M.typeSc(x)].unite;
+  /** Factures d'eau d'un exercice saisies pour la copro : {ttc, m3} ou null. */
+  M.facturesEau = (c, exo) => ((c.factures_eau || {})[exo] || null);
+  M.definirFacturesEau = (c, exo, { ttc = "", m3 = "" } = {}) => {
+    const t = String(ttc ?? "").trim() === "" ? null : U.nombreFr(ttc), v = String(m3 ?? "").trim() === "" ? null : U.nombreFr(m3);
+    if ((t !== null && t < 0) || (v !== null && v < 0) || (String(ttc ?? "").trim() !== "" && t === null) || (String(m3 ?? "").trim() !== "" && v === null)) throw new Error("Montant ou volume invalide.");
+    c.factures_eau = c.factures_eau || {};
+    if (t === null && v === null) delete c.factures_eau[exo]; else c.factures_eau[exo] = { ttc: t, m3: v };
+  };
+  M.STATUTS_SOUS_COMPTEUR = { a_relever: "à relever", index_initial: "index de départ", index_incoherent: "index incohérent", sans_edf: "factures EDF manquantes", sans_eau: "factures d'eau à saisir",
     sans_extraction: "extraction à importer", a_passer: "écriture à passer", passee: "écriture passée", ecart: "écart", meme_poste: "même compte : non contrôlable" };
   M.sousCompteurs = (c) => (c && c.sous_compteurs) || [];
-  const champsSousCompteur = ["nom", "emplacement", "pdl", "depart", "arrivee"];
+  const champsSousCompteur = ["type", "nom", "emplacement", "pdl", "depart", "arrivee"];
   const pdlParRae = (c) => new Map(M.pdlCopro(c).pdl.map((p) => [p.rae, p]));
   /** Postes de charge (compte + clé de répartition) des extractions de la copro. Un même compte peut servir sous plusieurs clés :
       le poste s'écrit alors « compte|clé », sinon « compte » seul. */
@@ -586,11 +598,13 @@
   };
   const verifierSousCompteur = (x) => {
     if (!x.nom) throw new Error("Donnez un nom au sous-compteur.");
+    x.type = M.typeSc(x);
+    if (x.type === "eau") x.pdl = ""; // pas de PDL pour l'eau
   };
   M.ajouterSousCompteur = (c, champs) => {
-    const x = { id: S.nouvelId(), nom: "", emplacement: "", pdl: "", depart: "", arrivee: "", releves: {}, cree_le: U.aujourdhui() };
+    const x = { id: S.nouvelId(), type: "elec", nom: "", emplacement: "", pdl: "", depart: "", arrivee: "", releves: {}, cree_le: U.aujourdhui() };
     for (const k of champsSousCompteur) if (champs[k] !== undefined) x[k] = String(champs[k] || "").trim();
-    if (x.pdl && !x.depart) x.depart = departDuPdl(c, x.pdl); // départ = compte de charge du PDL principal
+    if (M.typeSc(x) === "elec" && x.pdl && !x.depart) x.depart = departDuPdl(c, x.pdl); // départ = compte de charge du PDL principal
     verifierSousCompteur(x);
     (c.sous_compteurs = c.sous_compteurs || []).push(x);
     if (!M.todoProcess(c, "sous_compteurs")) {
@@ -604,7 +618,7 @@
     if (!x) return null;
     const avant = { ...x };
     for (const k of champsSousCompteur) if (champs[k] !== undefined) x[k] = String(champs[k] || "").trim();
-    if (champs.pdl !== undefined && x.pdl && !x.depart) x.depart = departDuPdl(c, x.pdl);
+    if (champs.pdl !== undefined && M.typeSc(x) === "elec" && x.pdl && !x.depart) x.depart = departDuPdl(c, x.pdl);
     try { verifierSousCompteur(x); } catch (e) { Object.assign(x, avant); throw e; }
     return x;
   };
@@ -662,11 +676,19 @@
   /** Conso, prix et montant d'un sous-compteur pour un exercice. */
   M.calculSousCompteur = (c, x, exo) => {
     const r = x.releves[exo.libelle] || null, p = x.releves[exo.decale(-1).libelle] || null;
-    const res = { exercice: exo.libelle, releve: r, precedent: p, conso: null, prix: null, montant: null, edf: null };
+    const res = { exercice: exo.libelle, releve: r, precedent: p, conso: null, prix: null, montant: null, edf: null, eau: null, unite: M.uniteSc(x) };
     if (!r) return { ...res, statut: "a_relever" };
     if (!p) return { ...res, statut: "index_initial" };
     res.conso = U.arrondi(r.ancien_final !== undefined ? r.ancien_final - p.index + r.index : r.index - p.index, 2);
     if (res.conso < 0) return { ...res, statut: "index_incoherent" };
+    if (M.typeSc(x) === "eau") {
+      const f = M.facturesEau(c, exo.libelle); // coût moyen : factures d'eau de l'exercice saisies pour la copro
+      res.eau = f;
+      if (!f || !f.ttc || !f.m3) return { ...res, statut: "sans_eau" };
+      res.prix = f.ttc / f.m3;
+      res.montant = U.arrondi(res.conso * res.prix, 2);
+      return { ...res, statut: "calcule" };
+    }
     const comptes = x.pdl ? comptesDuPdl(c, x.pdl) : [];
     const edf = comptes.length ? M.facturesEdfPeriode(comptes, exo.debut, exo.fin) : null; // coût moyen : factures EDF de l'exercice seulement
     res.edf = edf;
@@ -688,7 +710,9 @@
     const coutPdl = (rae) => { if (!edfPdl.has(rae)) { const ks = comptesDuPdl(c, rae); edfPdl.set(rae, ks.length ? M.consoEdfPeriode(ks, exo.debut, exo.fin).ttc || 0 : 0); } return edfPdl.get(rae); };
     const initial = (k) => {
       let v = pdls.filter((p) => dansPoste(k, p.compte_charge, p.cle)).reduce((t, p) => t + coutPdl(p.rae), 0); // factures des PDL imputés sur ce poste
-      if (!v) v = [...new Set(liste.filter((x) => x.depart === k && x.pdl).map((x) => x.pdl))].reduce((t, r) => t + coutPdl(r), 0); // compte de charge du PDL non renseigné
+      if (!v) v = [...new Set(liste.filter((x) => M.typeSc(x) === "elec" && x.depart === k && x.pdl).map((x) => x.pdl))].reduce((t, r) => t + coutPdl(r), 0); // compte de charge du PDL non renseigné
+      const eau = M.facturesEau(c, exo.libelle); // factures d'eau imputées sur le compte de départ des sous-compteurs d'eau
+      if (eau && eau.ttc && liste.some((x) => M.typeSc(x) === "eau" && x.depart === k)) v += eau.ttc;
       return U.arrondi(v, 2);
     };
     const flux = {};
