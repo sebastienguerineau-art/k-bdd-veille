@@ -571,7 +571,7 @@
     c.factures_eau = c.factures_eau || {};
     if (t === null && v === null) delete c.factures_eau[exo]; else c.factures_eau[exo] = { ttc: t, m3: v };
   };
-  M.STATUTS_SOUS_COMPTEUR = { a_relever: "à relever", index_initial: "index de départ", index_incoherent: "index incohérent", sans_edf: "factures EDF manquantes", sans_eau: "factures d'eau à saisir",
+  M.STATUTS_SOUS_COMPTEUR = { a_relever: "à relever", index_initial: "index de départ", index_incoherent: "index incohérent", sans_edf: "factures EDF manquantes", sans_eau: "eau facturée à saisir",
     sans_extraction: "extraction à importer", a_passer: "écriture à passer", passee: "écriture passée", ecart: "écart", meme_poste: "même compte : non contrôlable" };
   M.sousCompteurs = (c) => (c && c.sous_compteurs) || [];
   const champsSousCompteur = ["type", "nom", "emplacement", "pdl", "depart", "arrivee"];
