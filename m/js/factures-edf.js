@@ -613,14 +613,50 @@
     if (!c.sous_compteurs.length && S.db.todos && S.db.todos[c.numero]) S.db.todos[c.numero] = S.db.todos[c.numero].filter((t) => t.process !== "sous_compteurs");
   };
   /** Relevé de clôture d'un exercice ; index vide = relevé effacé. ancien_final : dernier index de l'ancien compteur s'il a été remplacé. */
-  M.releverSousCompteur = (c, id, exercice, { date = "", index = "", ancien_final = "" } = {}) => {
+  M.releverSousCompteur = (c, id, exercice, { date = "", index = "", ancien_final = "", photo = "", source = "" } = {}) => {
     const x = M.sousCompteurs(c).find((y) => y.id === id);
     if (!x) return;
     if (String(index ?? "").trim() === "") { delete x.releves[exercice]; return; }
     const i = U.nombreFr(index), af = String(ancien_final ?? "").trim() === "" ? null : U.nombreFr(ancien_final);
     if (i === null || i < 0) throw new Error("Index invalide.");
     if (String(ancien_final ?? "").trim() !== "" && (af === null || af < 0)) throw new Error("Index final de l'ancien compteur invalide.");
-    x.releves[exercice] = { date: date || "", index: i, ...(af !== null ? { ancien_final: af } : {}) };
+    x.releves[exercice] = { date: date || "", index: i, ...(af !== null ? { ancien_final: af } : {}), ...(photo ? { photo } : {}), ...(source ? { source } : {}) };
+  };
+  // ------------------------------------------------------------------ relevés saisis sur le téléphone (fichier déposé dans RESSOURCES\RELEVÉS)
+  M.TYPE_FICHIER_RELEVES = "kbdd-releves-sous-compteurs";
+  /** Exercice d'un relevé : celui dont la clôture est la plus proche de sa date (un relevé se fait à la clôture) ;
+      doute si la date est à plus de 75 jours de cette clôture. */
+  M.exercicePourReleve = (c, date) => {
+    const exo = K.E.exerciceClos(c.exercice || "01/01 au 31/12", U.decalerJours(date, 120));
+    const ecart = Math.abs(Date.parse(date) - Date.parse(exo.fin)) / 864e5;
+    return { exo, doute: ecart > 75 };
+  };
+  /** Dernier relevé connu d'un sous-compteur : {exercice, date, index}. */
+  M.dernierReleve = (x) => {
+    const fin = (e) => (String(e).match(/\d{4}/g) || [""]).pop();
+    const e = Object.keys(x.releves || {}).sort((a, b) => fin(b).localeCompare(fin(a)))[0];
+    return e ? { exercice: e, ...x.releves[e] } : null;
+  };
+  /** Lit un fichier de relevés du téléphone et prépare leur intégration : exercice proposé, conso, relevé déjà saisi, anomalies. */
+  M.lireRelevesTelephone = (texte) => {
+    let d;
+    try { d = JSON.parse(texte); } catch (e) { throw new Error("Fichier de relevés illisible."); }
+    if (!d || d.type !== M.TYPE_FICHIER_RELEVES || !Array.isArray(d.releves)) throw new Error("Ce fichier n'est pas un fichier de relevés K-BDD.");
+    return { cree_le: d.cree_le || "", lignes: d.releves.map((r, i) => {
+      const c = S.copro(String(r.copro || "")), x = c && M.sousCompteurs(c).find((y) => y.id === r.sous_compteur);
+      const base = { n: i, copro: r.copro, nom: r.nom || "", date: r.date || "", index: r.index, ancien_final: r.ancien_final ?? "", photo: r.photo || "" };
+      if (!c || !x) return { ...base, erreur: "sous-compteur introuvable dans la base (supprimé ?)" };
+      const { exo, doute } = M.exercicePourReleve(c, r.date || U.aujourdhui());
+      const prec = x.releves[exo.decale(-1).libelle], existant = x.releves[exo.libelle];
+      const index = U.nombreFr(r.index), af = r.ancien_final === "" || r.ancien_final === undefined ? null : U.nombreFr(r.ancien_final);
+      const conso = prec && index !== null ? U.arrondi(af !== null ? af - prec.index + index : index - prec.index, 2) : null;
+      const alertes = [];
+      if (index === null) alertes.push("index invalide");
+      if (conso !== null && conso < 0) alertes.push("index inférieur au précédent");
+      if (doute) alertes.push(`relevé loin de la clôture (${U.jjmmaaaa(exo.fin)}) : vérifiez l'exercice`);
+      if (existant && existant.index !== index) alertes.push(`remplace l'index ${U.nombre(existant.index, 0)} déjà saisi`);
+      return { ...base, c, x, exercice: exo.libelle, doute, conso, existant: existant || null, alertes };
+    }) };
   };
   const comptesDuPdl = (c, rae) => S.db.edf_comptes.filter((k) => k.copro === c.numero && M.pdlDuCompte(k.compte).includes(rae)).map((k) => k.compte);
   /** Conso, prix et montant d'un sous-compteur pour un exercice. */

@@ -218,8 +218,126 @@
     });
   };
 
+  // ------------------------------------------------------------------ relevés des sous-compteurs (saisis ici, envoyés par fichier dans OneDrive)
+  /* Brouillons gardés dans ce téléphone (IndexedDB : les photos dépassent la place de localStorage) jusqu'à l'envoi.
+     Clé : « copro|id du sous-compteur ». */
+  const idbReleves = () => new Promise((ok, ko) => { const r = indexedDB.open("kbdd-releves", 1); r.onupgradeneeded = () => r.result.createObjectStore("releves"); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error); });
+  const lireBrouillons = async () => { const d = await idbReleves(); return new Promise((ok) => { const t = d.transaction("releves").objectStore("releves").get("tous"); t.onsuccess = () => ok(t.result || {}); t.onerror = () => ok({}); }); };
+  const ecrireBrouillons = async (v) => { const d = await idbReleves(); return new Promise((ok, ko) => { const t = d.transaction("releves", "readwrite"); t.objectStore("releves").put(v, "tous"); t.oncomplete = ok; t.onerror = () => ko(t.error); }); };
+  let brouillons = {};
+  const coprosAvecSc = () => S.copros().filter((c) => c.actif && (c.sous_compteurs || []).length);
+  const nombre = (v) => { const n = U.nombreFr(v); return n === null ? null : n; };
+  /** Conso de l'an dernier (deux derniers relevés) pour repérer une conso anormale. */
+  const consoPrecedente = (x) => {
+    const fin = (e) => (String(e).match(/\d{4}/g) || [""]).pop();
+    const ex = Object.keys(x.releves || {}).sort((a, b) => fin(b).localeCompare(fin(a)));
+    if (ex.length < 2) return null;
+    const a = x.releves[ex[0]], b = x.releves[ex[1]];
+    return a.ancien_final !== undefined ? a.ancien_final - b.index + a.index : a.index - b.index;
+  };
+  const alertesReleve = (x, b) => {
+    const d = M.dernierReleve(x), i = nombre(b.index), af = b.remplace ? nombre(b.ancien_final) : null, res = [];
+    if (b.index !== "" && b.index !== undefined && i === null) res.push("index invalide");
+    if (d && i !== null) {
+      const conso = af !== null ? af - d.index + i : i - d.index, an = consoPrecedente(x);
+      if (conso < 0) res.push(`index inférieur au dernier relevé (${U.nombre(d.index, 0)}) : compteur remplacé ?`);
+      else if (an && conso > 2 * an) res.push(`conso ${U.nombre(conso, 0)} kWh : plus du double de l'an dernier (${U.nombre(an, 0)})`);
+    }
+    return res;
+  };
+  const vueReleves = () => {
+    const liste = coprosAvecSc(), prets = Object.values(brouillons).filter((b) => b.index !== "" && b.index !== undefined && !b.envoye_le);
+    const envoyes = Object.values(brouillons).filter((b) => b.envoye_le);
+    const carte = (c, x) => {
+      const cle = `${c.numero}|${x.id}`, b = brouillons[cle] || {}, d = M.dernierReleve(x), al = alertesReleve(x, b);
+      return `<div class="m-carte m-releve ${b.envoye_le ? "envoye" : ""}" data-releve="${h(cle)}">
+        <div class="m-releve-tete"><b>${h(x.nom)}</b>${x.emplacement ? `<small>${h(x.emplacement)}</small>` : ""}</div>
+        <div class="m-muted petit">Dernier relevé : ${d ? `<b>${U.nombre(d.index, 0)}</b> le ${U.jjmmaaaa(d.date) || d.exercice}` : "aucun"}</div>
+        <div class="m-releve-saisie">
+          <label>Index<input type="text" inputmode="decimal" data-r="index" value="${h(b.index ?? "")}" placeholder="${d ? U.nombre(d.index, 0) : "index"}"></label>
+          <label>Date<input type="date" data-r="date" value="${h(b.date || U.aujourdhui())}"></label></div>
+        <label class="m-case"><input type="checkbox" data-r="remplace" ${b.remplace ? "checked" : ""}> Compteur remplacé</label>
+        ${b.remplace ? `<label class="m-releve-af">Index final de l'ancien compteur<input type="text" inputmode="decimal" data-r="ancien_final" value="${h(b.ancien_final ?? "")}"></label>` : ""}
+        <div class="m-releve-photo">${b.photo ? `<img src="${b.photo}" alt="Photo du compteur">` : ""}
+          <label class="m-bouton petit">${b.photo ? "Reprendre la photo" : "📷 Photo du compteur"}<input type="file" accept="image/*" capture="environment" data-r="photo" hidden></label></div>
+        ${al.length ? `<ul class="m-puces">${al.map((a) => `<li class="m-alerte">⚠ ${h(a)}</li>`).join("")}</ul>` : ""}
+        ${b.envoye_le ? `<p class="m-muted petit">Envoyé le ${h(b.envoye_le)}</p>` : ""}</div>`;
+    };
+    return `<h1 class="m-h1">Relevés des sous-compteurs</h1>
+      <p class="m-sous">Saisis sur ce téléphone (même sans réseau), puis envoyés dans OneDrive : RESSOURCES › RELEVÉS. Le PC les intègre après votre validation.</p>
+      ${liste.length ? liste.map((c) => `<h2 class="m-h2">${h(c.numero)} ${h(c.nom)}</h2>${c.sous_compteurs.map((x) => carte(c, x)).join("")}`).join("")
+        : '<p class="m-muted">Aucun sous-compteur dans la base chargée.</p>'}
+      <div class="m-envoi"><button class="m-bouton primaire" id="m-envoyer" ${prets.length ? "" : "disabled"}>Envoyer ${prets.length} relevé${prets.length > 1 ? "s" : ""}</button>
+        ${envoyes.length ? `<button class="m-bouton" id="m-vider">Effacer les ${envoyes.length} relevé${envoyes.length > 1 ? "s" : ""} déjà envoyé${envoyes.length > 1 ? "s" : ""}</button>` : ""}</div>`;
+  };
+  /** Photo réduite (1280 px, JPEG) : environ 200 Ko. */
+  const reduirePhoto = (fichier) => new Promise((ok, ko) => {
+    const img = new Image(), url = URL.createObjectURL(fichier);
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height)), cv = document.createElement("canvas");
+      cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
+      ok(cv.toDataURL("image/jpeg", 0.72));
+    };
+    img.onerror = () => ko(new Error("Photo illisible."));
+    img.src = url;
+  });
+  const brancherReleves = () => {
+    $$("[data-releve]").forEach((carte) => {
+      const cle = carte.dataset.releve, [copro, id] = cle.split("|");
+      const maj = async (champs, reafficher) => {
+        const x = (S.copro(copro).sous_compteurs || []).find((y) => String(y.id) === id);
+        brouillons[cle] = { ...(brouillons[cle] || { date: U.aujourdhui() }), copro, sous_compteur: x.id, nom: x.nom, ...champs, envoye_le: "" };
+        await ecrireBrouillons(brouillons);
+        if (reafficher) return afficher();
+        const al = alertesReleve(x, brouillons[cle]);
+        let ul = $(".m-puces", carte); // alertes de la carte mises à jour sans réafficher (le clavier reste ouvert)
+        if (!ul && al.length) { ul = document.createElement("ul"); ul.className = "m-puces"; $(".m-releve-photo", carte).after(ul); }
+        if (ul) ul.innerHTML = al.map((a) => `<li class="m-alerte">⚠ ${h(a)}</li>`).join("");
+        message(al.length ? `⚠ ${al[0]}` : "Relevé enregistré sur ce téléphone.", !!al.length); majBoutonEnvoi();
+      };
+      $$("[data-r]", carte).forEach((ch) => ch.addEventListener("change", async () => {
+        const k = ch.dataset.r;
+        if (k === "photo") { if (!ch.files[0]) return; try { await maj({ photo: await reduirePhoto(ch.files[0]) }, true); } catch (e) { message(e.message, true); } return; }
+        if (k === "remplace") return maj({ remplace: ch.checked }, true);
+        await maj({ [k]: ch.value.trim() }, false);
+      }));
+    });
+    const envoi = $("#m-envoyer");
+    if (envoi) envoi.addEventListener("click", envoyerReleves);
+    const vider = $("#m-vider");
+    if (vider) vider.addEventListener("click", async () => {
+      if (!confirm("Effacer de ce téléphone les relevés déjà envoyés ?")) return;
+      for (const [k, b] of Object.entries(brouillons)) if (b.envoye_le) delete brouillons[k];
+      await ecrireBrouillons(brouillons); afficher();
+    });
+  };
+  const majBoutonEnvoi = () => {
+    const n = Object.values(brouillons).filter((b) => b.index !== "" && b.index !== undefined && !b.envoye_le).length, bt = $("#m-envoyer");
+    if (bt) { bt.disabled = !n; bt.textContent = `Envoyer ${n} relevé${n > 1 ? "s" : ""}`; }
+  };
+  /** Fichier de relevés : partagé (iPhone : « Enregistrer dans Fichiers » › OneDrive › BASE DE DONNÉES › RESSOURCES › RELEVÉS), sinon téléchargé. */
+  const envoyerReleves = async () => {
+    const prets = Object.entries(brouillons).filter(([, b]) => b.index !== "" && b.index !== undefined && !b.envoye_le);
+    if (!prets.length) return;
+    const maintenant = new Date(), horo = maintenant.toISOString().slice(0, 16).replace("T", " ").replace(":", "h");
+    const d = { type: M.TYPE_FICHIER_RELEVES, version: 1, cree_le: maintenant.toISOString(), releves: prets.map(([, b]) => ({
+      copro: b.copro, sous_compteur: b.sous_compteur, nom: b.nom, date: b.date || U.aujourdhui(), index: b.index,
+      ...(b.remplace && b.ancien_final ? { ancien_final: b.ancien_final } : {}), ...(b.photo ? { photo: b.photo } : {}) })) };
+    const nom = `Relevés sous-compteurs ${horo}.json`, fichier = new File([JSON.stringify(d)], nom, { type: "application/json" });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [fichier] })) await navigator.share({ files: [fichier], title: nom });
+      else { const a = document.createElement("a"); a.href = URL.createObjectURL(fichier); a.download = nom; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+    } catch (e) { if (e.name === "AbortError") return message("Envoi annulé : les relevés restent sur ce téléphone."); return message(`Envoi impossible : ${e.message}`, true); }
+    const le = maintenant.toLocaleString("fr-FR").slice(0, 16);
+    for (const [k] of prets) brouillons[k].envoye_le = le;
+    await ecrireBrouillons(brouillons);
+    message(`${prets.length} relevé(s) envoyé(s). Rangez le fichier dans OneDrive › BASE DE DONNÉES › RESSOURCES › RELEVÉS.`);
+    afficher();
+  };
+
   // ------------------------------------------------------------------ routeur
-  const ONGLETS = [["", "Accueil", "⌂"], ["copros", "Copros", "▦"], ["agenda", "Agenda", "▤"], ["veille", "Veille", "✎"], ["base", "Base", "⇅"]];
+  const ONGLETS = [["", "Accueil", "⌂"], ["copros", "Copros", "▦"], ["agenda", "Agenda", "▤"], ["releves", "Relevés", "⊕"], ["veille", "Veille", "✎"], ["base", "Base", "⇅"]];
   const route = () => {
     const [chemin, q] = (location.hash.slice(2) || "").split("?");
     const [page, arg] = chemin.split("/");
@@ -238,12 +356,13 @@
         <a class="m-bouton primaire" href="#/base">Charger la base</a></div>`;
       return;
     }
-    const vues = { "": vueAccueil, copros: () => vueCopros(r.params), copro: () => vueCopro(r.arg), taches: vueTaches, agenda: vueAgenda, veille: vueVeille, base: vueBase };
+    const vues = { "": vueAccueil, copros: () => vueCopros(r.params), copro: () => vueCopro(r.arg), taches: vueTaches, agenda: vueAgenda, releves: vueReleves, veille: vueVeille, base: vueBase };
     page.innerHTML = (vues[r.page] || vueAccueil)();
     window.scrollTo(0, 0);
     if (r.page === "copros") brancherCopros();
     if (r.page === "copro") brancherCopro();
     if (r.page === "base") brancherBase();
+    if (r.page === "releves") brancherReleves();
     const pf = $("#m-pf");
     if (pf) pf.addEventListener("change", () => { memo.set("portefeuille", pf.value || "*"); afficher(); });
     $$("[data-veille]").forEach((a) => a.addEventListener("click", () => { const lu = memo.get("veille.lu") || {}; lu[a.dataset.veille] = 1; memo.set("veille.lu", lu); a.closest("li").classList.add("lu"); }));
@@ -251,6 +370,7 @@
 
   (async () => {
     await S.charger();
+    try { brouillons = await lireBrouillons(); } catch (e) { brouillons = {}; }
     S.dossier = null; // jamais d'écriture dans un dossier depuis le téléphone
     window.addEventListener("hashchange", afficher);
     afficher();
