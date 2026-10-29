@@ -556,14 +556,34 @@
   M.sousCompteurs = (c) => (c && c.sous_compteurs) || [];
   const champsSousCompteur = ["nom", "emplacement", "pdl", "depart", "arrivee"];
   const pdlParRae = (c) => new Map(M.pdlCopro(c).pdl.map((p) => [p.rae, p]));
+  /** Postes de charge (compte + clé de répartition) des extractions de la copro. Un même compte peut servir sous plusieurs clés :
+      le poste s'écrit alors « compte|clé », sinon « compte » seul. */
+  M.postesChargeCopro = (numero) => {
+    const res = new Map();
+    for (const b of Object.values(S.db.budgets).filter((x) => x.copro === numero))
+      for (const l of b.lignes) if (/^6/.test(l.compte || "")) res.set(`${l.compte}|${l.cle || ""}`, { compte: l.compte, cle: l.cle || "", libelle: l.libelle });
+    const parCompte = {};
+    for (const x of res.values()) parCompte[x.compte] = (parCompte[x.compte] || 0) + 1;
+    return [...res.values()].map((x) => ({ ...x, poste: parCompte[x.compte] > 1 ? `${x.compte}|${x.cle}` : x.compte }))
+      .sort((a, b) => a.compte.localeCompare(b.compte) || a.cle.localeCompare(b.cle));
+  };
+  M.lirePoste = (poste) => { const [compte, cle] = String(poste || "").split("|"); return { compte: compte || "", cle: cle || "" }; };
+  const dansPoste = (poste, compte, cle) => { const p = M.lirePoste(poste); return compte === p.compte && (!p.cle || (cle || "") === p.cle); };
+  /** Compte de départ par défaut : compte de charge du PDL principal (avec sa clé si le compte sert sous plusieurs clés). */
+  const departDuPdl = (c, rae) => {
+    const p = pdlParRae(c).get(rae) || {};
+    if (!p.compte_charge) return "";
+    const postes = M.postesChargeCopro(c.numero).filter((x) => x.compte === p.compte_charge);
+    return (postes.find((x) => x.cle === p.cle) || postes[0] || { poste: p.compte_charge }).poste;
+  };
   const verifierSousCompteur = (x) => {
     if (!x.nom) throw new Error("Donnez un nom au sous-compteur.");
-    if (x.depart && x.depart === x.arrivee) throw new Error("Le compte d'arrivée doit être différent du compte de départ.");
+    if (x.depart && x.depart === x.arrivee) throw new Error("L'arrivée doit différer du départ : autre compte, ou même compte sous une autre clé de répartition.");
   };
   M.ajouterSousCompteur = (c, champs) => {
     const x = { id: S.nouvelId(), nom: "", emplacement: "", pdl: "", depart: "", arrivee: "", releves: {}, cree_le: U.aujourdhui() };
     for (const k of champsSousCompteur) if (champs[k] !== undefined) x[k] = String(champs[k] || "").trim();
-    if (x.pdl && !x.depart) x.depart = (pdlParRae(c).get(x.pdl) || {}).compte_charge || ""; // départ = compte de charge du PDL principal
+    if (x.pdl && !x.depart) x.depart = departDuPdl(c, x.pdl); // départ = compte de charge du PDL principal
     verifierSousCompteur(x);
     (c.sous_compteurs = c.sous_compteurs || []).push(x);
     if (!M.todoProcess(c, "sous_compteurs")) {
@@ -577,7 +597,7 @@
     if (!x) return null;
     const avant = { ...x };
     for (const k of champsSousCompteur) if (champs[k] !== undefined) x[k] = String(champs[k] || "").trim();
-    if (champs.pdl !== undefined && x.pdl && !x.depart) x.depart = (pdlParRae(c).get(x.pdl) || {}).compte_charge || "";
+    if (champs.pdl !== undefined && x.pdl && !x.depart) x.depart = departDuPdl(c, x.pdl);
     try { verifierSousCompteur(x); } catch (e) { Object.assign(x, avant); throw e; }
     return x;
   };
@@ -620,11 +640,11 @@
     if (!liste.length) return null;
     const b = S.db.budgets[`${c.numero}|${exo.libelle}`];
     const calc = liste.map((x) => ({ x, ...M.calculSousCompteur(c, x, exo) }));
-    const reel = (k) => U.arrondi((b ? b.lignes : []).filter((l) => l.compte === k).reduce((t, l) => t + (Number(l.charges) || 0), 0), 2);
+    const reel = (k) => U.arrondi((b ? b.lignes : []).filter((l) => dansPoste(k, l.compte, l.cle)).reduce((t, l) => t + (Number(l.charges) || 0), 0), 2);
     const pdls = M.pdlCopro(c).pdl, edfPdl = new Map();
     const coutPdl = (rae) => { if (!edfPdl.has(rae)) { const ks = comptesDuPdl(c, rae); edfPdl.set(rae, ks.length ? M.consoEdfPeriode(ks, exo.debut, exo.fin).ttc || 0 : 0); } return edfPdl.get(rae); };
     const initial = (k) => {
-      let v = pdls.filter((p) => p.compte_charge === k).reduce((t, p) => t + coutPdl(p.rae), 0);
+      let v = pdls.filter((p) => dansPoste(k, p.compte_charge, p.cle)).reduce((t, p) => t + coutPdl(p.rae), 0); // factures des PDL imputés sur ce poste
       if (!v) v = [...new Set(liste.filter((x) => x.depart === k && x.pdl).map((x) => x.pdl))].reduce((t, r) => t + coutPdl(r), 0); // compte de charge du PDL non renseigné
       return U.arrondi(v, 2);
     };
@@ -632,7 +652,7 @@
     for (const l of calc) if (l.statut === "calcule" && l.x.depart && l.x.arrivee) {
       flux[l.x.depart] = (flux[l.x.depart] || 0) - l.montant; flux[l.x.arrivee] = (flux[l.x.arrivee] || 0) + l.montant;
     }
-    const etat = (k) => { const avant = initial(k); return { compte: k, avant, apres: U.arrondi(avant + (flux[k] || 0), 2), reel: reel(k), present: !!(b && b.lignes.some((l) => l.compte === k)) }; };
+    const etat = (k) => { const avant = initial(k); return { compte: k, avant, apres: U.arrondi(avant + (flux[k] || 0), 2), reel: reel(k), present: !!(b && b.lignes.some((l) => dansPoste(k, l.compte, l.cle))) }; };
     const lignes = calc.map((l) => {
       if (l.statut !== "calcule") return l;
       if (!l.x.depart || !l.x.arrivee) return { ...l, statut: "a_passer", incomplet: true };
@@ -640,7 +660,7 @@
       const d = etat(l.x.depart), a = etat(l.x.arrivee);
       const tol = Math.max(2, Math.abs(d.avant) * 0.005), pres = (e, v) => Math.abs(e.reel - v) <= tol;
       const statut = pres(d, d.apres) && pres(a, a.apres) ? "passee" : pres(d, d.avant) && pres(a, a.avant) ? "a_passer" : "ecart";
-      return { ...l, statut, depart: d, arrivee: a, passe_estime: U.arrondi(d.avant - d.reel, 2) };
+      return { ...l, statut, depart: d, arrivee: a, passe_estime: U.arrondi(a.reel - a.avant, 2) /* reçu par le poste d'arrivée (le départ peut être commun à plusieurs sous-compteurs) */ };
     });
     const ok = lignes.every((l) => l.statut === "passee" || l.statut === "index_initial");
     return { exercice: exo.libelle, extraction: !!b, lignes, ok };
