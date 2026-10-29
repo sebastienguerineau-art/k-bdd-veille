@@ -96,13 +96,15 @@
   U.horodatage = () => new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
 
   // ------------------------------------------------------------------ fichiers texte
+  const CP1252 = "€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008dŽ\u008f\u0090‘’“”•–—˜™š›œ\u009džŸ";
   U.lireTexte = (contenu) => {
     if (typeof contenu === "string") return contenu;
     const octets = contenu instanceof Uint8Array ? contenu : new Uint8Array(contenu);
     try {
       return new TextDecoder("utf-8", { fatal: true }).decode(octets).replace(/^﻿/, "");
     } catch (e) {
-      return new TextDecoder("windows-1252").decode(octets);
+      // 0x80-0x9F : caractères propres à Windows-1252 (€, guillemets, tirets…), corrigés si le décodeur les lit en Latin-1
+      return new TextDecoder("windows-1252").decode(octets).replace(/[\u0080-\u009f]/g, (ch) => CP1252[ch.charCodeAt(0) - 0x80] || ch);
     }
   };
   /* Lit un CSV ';' comme Power Query (Csv.Document, QuoteStyle.None). */

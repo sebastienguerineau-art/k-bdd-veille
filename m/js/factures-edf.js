@@ -243,9 +243,11 @@
     return { exercice: libelle, debut: b.date_debut, fin: b.date_fin, en_cours: b.date_fin >= aujourdhui, compta, edf, ecart, statut, couverture: tot.couverture, factures, note,
       lignes: lignes.map((l) => ({ compte: l.compte, libelle: l.libelle, charges: l.charges })), detail, pistes: pistes.slice(0, 3), sources: tot.sources };
   };
+  /** Clé de tri d'un exercice importé : année de fin du libellé (« 2024/2025 » → 2025), puis date de fin (format variable selon l'extraction). */
+  const finExercice = (b) => `${(String(b.exercice).match(/\d{4}/g) || [""]).pop()}|${b.date_fin || ""}`;
   /** Contrôles des derniers exercices importés d'une copro (plus récent en premier). */
   M.controlesEdfCopro = (c, n = 3) => Object.values(S.db.budgets).filter((b) => b.copro === c.numero && b.date_fin)
-    .sort((a, b) => b.date_fin.localeCompare(a.date_fin)).slice(0, n).map((b) => M.controleEdfCompta(c, b.exercice)).filter((x) => x && x.statut);
+    .sort((a, b) => finExercice(b).localeCompare(finExercice(a))).slice(0, n).map((b) => M.controleEdfCompta(c, b.exercice)).filter((x) => x && x.statut);
 
   // ------------------------------------------------------------------ tous les PDL connus (factures + synthèses) : recherche, ajout / retrait
   let cacheIndex = null;
