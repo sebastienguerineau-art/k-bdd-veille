@@ -265,7 +265,7 @@
     const personnes = [];
     for (const role of ["comptable", "gestionnaire", "assistante"]) {
       for (const p of S.personnes(role)) {
-        const cs = actives.filter((c) => c[role] === p.prenom);
+        const cs = actives.filter((c) => (role === "assistante" ? M.assistanteCopro(c) : c[role]) === p.prenom);
         if (!cs.length) continue;
         const st = { a_faire: 0, en_cours: 0, envoyee: 0 };
         cs.forEach((c) => { if (parCle[c.numero]) st[parCle[c.numero].statut]++; });

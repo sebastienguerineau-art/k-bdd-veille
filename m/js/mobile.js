@@ -134,7 +134,7 @@
         ${c.actif ? "" : pastille("neutre", c.perdue ? "perdue" : "inactive")}</p>
       ${adresse ? `<a class="m-adresse" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(adresse)}" target="_blank" rel="noopener">📍 ${h(adresse)}</a>` : ""}
       ${c.notes ? `<p class="m-note">${h(c.notes).replace(/\n/g, "<br>")}</p>` : ""}
-      ${section("Informations", `${ligne("Exercice", h(c.exercice))}${ligne("Assistante", h(c.assistante))}${ligne("Lots", c.quantite ? `${U.nombre(c.quantite, 0)} ${c.lots_surface === "SURFACE" ? "m²" : "lots"}` : "")}
+      ${section("Informations", `${ligne("Exercice", h(c.exercice))}${ligne("Assistante", h(M.assistanteCopro(c)))}${ligne("Lots", c.quantite ? `${U.nombre(c.quantite, 0)} ${c.lots_surface === "SURFACE" ? "m²" : "lots"}` : "")}
         ${ligne("Honoraires", c.honos_ttc ? `${U.euro(c.honos_ttc)} TTC` : "")}${ligne("", ht !== null && c.honos_ttc ? `${U.euro(ht)} HT${un !== null ? ` · ${U.nombre(un)} € HT / ${c.lots_surface === "SURFACE" ? "m²" : "lot"}` : ""}` : "")}
         ${c.decret_tertiaire ? ligne("Décret tertiaire", "soumise") : ""}`, true)}
       ${section(`Synthèse ${h(e.exercice.libelle)}`, synthese, e.todos_ouvertes.length > 0, e.todos_ouvertes.length ? ` <span class="m-n">${e.todos_ouvertes.length}</span>` : "")}

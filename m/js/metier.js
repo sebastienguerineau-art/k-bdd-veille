@@ -173,10 +173,15 @@
 
   M.emailsPersonne = (role, prenom) => (prenom && (S.db.personnes.find((p) => p.role === role && p.prenom === prenom) || {}).emails) || "";
   M.emailsGestionnaire = (prenom) => M.emailsPersonne("gestionnaire", prenom);
-  /** Destinataires de la synthèse : gestionnaire + assistante de la copro, sans doublon (« a ; b »). */
+  /** Assistante d'une copro : celle du gestionnaire (profil du gestionnaire), sinon l'ancienne affectation de la copro. */
+  M.assistanteCopro = (c) => {
+    const g = c && c.gestionnaire && S.db.personnes.find((p) => p.role === "gestionnaire" && p.prenom === c.gestionnaire);
+    return (g && g.assistante) || (c && c.assistante) || "";
+  };
+  /** Destinataires de la synthèse : gestionnaire + son assistante, sans doublon (« a ; b »). */
   M.destinatairesSynthese = (c) => {
     const vus = new Set(), res = [];
-    for (const e of `${M.emailsPersonne("gestionnaire", c.gestionnaire)};${M.emailsPersonne("assistante", c.assistante)}`.split(/[;,]/)) {
+    for (const e of `${M.emailsPersonne("gestionnaire", c.gestionnaire)};${M.emailsPersonne("assistante", M.assistanteCopro(c))}`.split(/[;,]/)) {
       const x = e.trim();
       if (x && !vus.has(x.toLowerCase())) { vus.add(x.toLowerCase()); res.push(x); }
     }
@@ -654,7 +659,7 @@
   M.dansPortefeuille = (c, portefeuille) => {
     if (!portefeuille) return true;
     const [role, prenom] = portefeuille.split(":");
-    return (c[role] || "") === prenom;
+    return (role === "assistante" ? M.assistanteCopro(c) : c[role] || "") === prenom;
   };
   M.STATUTS_SYNTHESE = { a_faire: "À faire", en_cours: "Fiche sauvegardée", envoyee: "Mail préparé" };
   /** État de la synthèse d'une copro pour son dernier exercice clos (décalage 1 = exercice précédent). */

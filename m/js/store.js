@@ -171,6 +171,13 @@
     // dates d'exercice des extractions au format AAAA-MM-JJ (une date « 30/06/2023 » fausse les tris et les périodes)
     for (const b of Object.values(S.db.budgets || {})) for (const k of ["date_debut", "date_fin"]) if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(b[k] || "")) b[k] = U.dateFr(b[k]);
     if (!S.db.todos) S.db.todos = {};
+    // assistante rattachée au gestionnaire (profil) : reprise de l'affectation la plus fréquente de ses copros
+    for (const g of (S.db.personnes || []).filter((p) => p.role === "gestionnaire" && p.assistante === undefined)) {
+      const n = {};
+      for (const c of Object.values(S.db.copros || {})) if (c.gestionnaire === g.prenom && c.assistante) n[c.assistante] = (n[c.assistante] || 0) + 1;
+      const choix = Object.entries(n).sort((a, b) => b[1] - a[1])[0];
+      g.assistante = choix ? choix[0] : "";
+    }
     // tâche des sous-compteurs : électricité et eau
     for (const l of Object.values(S.db.todos)) for (const t of l || []) if (t.process === "sous_compteurs" && t.texte === "Relever les sous-compteurs électriques") t.texte = "Relever les sous-compteurs";
     if (!S.db.rappro_justifs) S.db.rappro_justifs = {};
