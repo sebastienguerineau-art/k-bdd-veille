@@ -19,10 +19,10 @@ function lire() {
 }
 
 async function lireSource(s) {
-  const r = await fetch(s.url, { headers: { "User-Agent": "Mozilla/5.0 (K-BDD veille juridique)", Accept: "application/rss+xml, application/xml, text/xml, */*" },
+  const r = await fetch(s.url, { headers: { "User-Agent": s.format ? UA_NAV : "Mozilla/5.0 (K-BDD veille juridique)", Accept: s.format ? "text/html,application/xhtml+xml" : "application/rss+xml, application/xml, text/xml, */*" },
     signal: AbortSignal.timeout(25000), redirect: "follow" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return V.lireFlux(await r.text());
+  return s.format === "fnaim" ? V.lireFnaim(await r.text()) : V.lireFlux(await r.text());
 }
 
 // ------------------------------------------------------------------ illustration des articles
