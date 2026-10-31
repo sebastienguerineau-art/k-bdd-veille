@@ -658,6 +658,22 @@
   };
   M.STATUTS_SYNTHESE = { a_faire: "À faire", en_cours: "Fiche sauvegardée", envoyee: "Mail préparé" };
   /** État de la synthèse d'une copro pour son dernier exercice clos (décalage 1 = exercice précédent). */
+  /** Charges de l'exercice intégrées : extraction N importée après la clôture (avant, les charges sont incomplètes).
+      Une synthèse émise ne compte comme faite qu'à cette condition. Import sans date (anciennes bases) : accepté. */
+  M.chargesIntegrees = (c, exo) => {
+    const b = S.db.budgets[`${c.numero}|${exo.libelle}`];
+    if (!b) return false;
+    const le = b.importe_le ? U.dateFr(String(b.importe_le).slice(0, 10)) : null;
+    return !le || le >= exo.fin;
+  };
+  /** Clôture explicite de la synthèse (bouton « Clôturer la synthèse ») : la sort des synthèses à faire, quelles que soient les extractions ; rouvrir = false. */
+  M.cloturerSynthese = (numero, exercice, oui = true) => {
+    if (!S.db.syntheses_cloturees) S.db.syntheses_cloturees = {};
+    const cle = `${numero}|${exercice}`;
+    if (oui) S.db.syntheses_cloturees[cle] = { le: U.horodatage() }; else delete S.db.syntheses_cloturees[cle];
+    S.sauver();
+  };
+  M.syntheseCloturee = (numero, exercice) => (S.db.syntheses_cloturees || {})[`${numero}|${exercice}`] || null;
   M.etatSynthese = (c, decalage = 0, reference) => {
     const exo = E.exerciceClos(c.exercice, reference).decale(-decalage);
     const cle = `${c.numero}|${exo.libelle}`;
@@ -669,8 +685,11 @@
     const honos = chN ? M.honorairesSynthese(c, chN.comptes) : null;
     if (M.synchroTodoSousCompteurs && M.sousCompteurs(c).length) M.synchroTodoSousCompteurs(c, exo); // tâche cochée par le contrôle des écritures
     const todos = M.todosPour(c.numero, exo).actives;
+    const bN = S.db.budgets[cle], chargesN = M.chargesIntegrees(c, exo), cloturee = M.syntheseCloturee(c.numero, exo.libelle);
+    const emise = !!(r && r.envoyee_le), sansCharges = emise && !chargesN;
     return {
-      copro: c, exercice: exo, cle, statut: (r && r.envoyee_le) || faite ? "envoyee" : r ? "en_cours" : "a_faire",
+      copro: c, exercice: exo, cle, statut: cloturee || (emise && chargesN) || faite ? "envoyee" : r ? "en_cours" : "a_faire",
+      cloturee_le: cloturee ? cloturee.le : "", emise_sans_charges: sansCharges && !faite && !cloturee, charges_n: chargesN, extraction_n_le: bN ? bN.importe_le || "" : "",
       fiche_le: r ? r.modifie_le || "" : "", envoyee_le: (r && r.envoyee_le) || (faite ? faite.le : ""), envoyee_a: (r && r.envoyee_a) || (faite ? "considérée comme faite" : ""),
       faite: !!faite && !(r && r.envoyee_le),
       manquants, exercice_renseigne: !!c.exercice, alerte_honoraires: !!(honos && honos.alerte),
