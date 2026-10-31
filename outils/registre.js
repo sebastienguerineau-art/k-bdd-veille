@@ -1,5 +1,6 @@
 /* Extrait quotidien du Registre national d'immatriculation des copropriétés (open data Anah, data.gouv.fr) :
-   copropriétés gérées par le cabinet, lues par K-BDD (fiche copro, registre, calendrier).
+   copropriétés gérées par le cabinet, lues par K-BDD (fiche copro, registre, calendrier), complétées par l'annuaire
+   public du registre en direct (mandat, syndic, date de mise à jour : l'open data est publié avec une à deux semaines de retard).
    Usage : node outils/registre.js [fichier.csv local, pour essai]   (Node 20+) */
 "use strict";
 const fs = require("fs");
@@ -62,6 +63,44 @@ async function* lignesDe(flux) {
   if (reste) yield reste;
 }
 
+// ------------------------------------------------------------------ annuaire public en direct (plus à jour que l'open data, publié avec retard)
+const ANNUAIRE = "https://www.registre-coproprietes.gouv.fr/api/public/annuaire/";
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const iso = (fr) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(fr || ""); return m ? `${m[3]}-${m[2]}-${m[1]}` : ""; };
+/** Fiche de l'annuaire d'une copropriété (null si introuvable ou service indisponible). */
+async function ficheAnnuaire(numero) {
+  const r = await fetch(ANNUAIRE + "rechercherAnnuaire", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isRechercheAvancee: true, adresseNonSelectionnee: null, adresseNonStructuree: null, numeroImmatriculation: numero }) });
+  if (!r.ok) return null;
+  const t = await r.text(), liste = t ? JSON.parse(t) : [];
+  const x = liste.find((y) => y.numeroImmatriculation === numero);
+  if (!x) return null;
+  const d = await fetch(ANNUAIRE + "coproannuairedetail/" + x.id);
+  if (!d.ok) return null;
+  const f = await d.json(), rat = (f.immatCopropriete && f.immatCopropriete.infoRattachement) || {}, id = (f.immatCopropriete && f.immatCopropriete.identification) || {};
+  return { id: x.id, nom: id.nomCopropriete || x.nomCopropriete || "", syndic: f.raisonSocialeOuNomSyndic || "", siret: f.siret || "", type_syndic: f.typeTeledeclarant || "",
+    etat: f.etatCopropriete || "", date_derniere_modif: iso(f.dateDerniereModif), mandat_debut: iso(rat.dateDebutMandat), mandat_fin: iso(rat.dateFinMandat),
+    justificatif: rat.typeJustifMandat || "", depose_le: iso(rat.dateTeleversement) };
+}
+/** Complète les lignes de l'open data par l'annuaire : mandat, syndic, nom et date de mise à jour quand l'annuaire est plus récent. */
+async function completerParAnnuaire(copros, aujourdhui) {
+  let lues = 0, erreurs = 0;
+  for (const c of copros) {
+    try {
+      const a = await ficheAnnuaire(c.numero_immatriculation);
+      await pause(300); // service public : une requête à la fois
+      if (!a) continue;
+      lues++;
+      c.annuaire = a;
+      if (a.date_derniere_modif && a.date_derniere_modif > (c.date_derniere_maj || "")) c.date_derniere_maj = a.date_derniere_modif;
+      if (a.mandat_fin) { c.date_fin_dernier_mandat = a.mandat_fin; c.mandat_en_cours = a.mandat_fin >= aujourdhui ? "Mandat en cours" : "Pas de mandat en cours"; }
+      if (a.siret) c.siret_representant_legal = a.siret;
+      if (a.nom) c.nom_usage_copropriete = a.nom;
+    } catch (e) { erreurs++; if (erreurs > 5) { console.error(`Annuaire indisponible : ${e.message}`); break; } }
+  }
+  return { lues, erreurs };
+}
+
 (async () => {
   let lignes, source = "", donneesDu = "";
   if (process.argv[2]) { lignes = lignesDe(fs.createReadStream(process.argv[2])); source = process.argv[2]; donneesDu = new Date().toISOString().slice(0, 10); }
@@ -78,9 +117,11 @@ async function* lignesDe(flux) {
   const copros = await filtrer(lignes, suivies);
   const absentes = [...suivies].filter((n) => !copros.some((c) => c.numero_immatriculation === n));
   if (!copros.length) throw new Error("Aucune copropriété du cabinet trouvée : fichier publié sans données ou SIREN modifié ?");
-  const d = { donnees_du: donneesDu, source: "Registre national d'immatriculation des copropriétés (Anah, data.gouv.fr, Licence Ouverte)", fichier: source,
+  const aujourdhui = new Date().toISOString().slice(0, 10);
+  const ann = process.env.SANS_ANNUAIRE ? { lues: 0, erreurs: 0 } : await completerParAnnuaire(copros, aujourdhui);
+  const d = { donnees_du: donneesDu, annuaire_le: ann.lues ? aujourdhui : "", source: "Registre national d'immatriculation des copropriétés (Anah, data.gouv.fr, Licence Ouverte)", fichier: source,
     syndic: { siren: SIREN, etablissement: ETABLISSEMENT, departement: DEPARTEMENT }, suivies: [...suivies].sort(), introuvables: absentes, copros };
   fs.mkdirSync(path.dirname(SORTIE), { recursive: true });
   fs.writeFileSync(SORTIE, `/* Généré par outils/registre.js : ne pas modifier à la main. */\nglobalThis.K_REGISTRE = ${JSON.stringify(d)};\n`);
-  console.log(`${copros.length} copropriété(s), dont ${copros.filter((c) => c.suivie).length} suivie(s) en plus, données du ${donneesDu}.${absentes.length ? ` Introuvables : ${absentes.join(", ")}.` : ""}`);
+  console.log(`${copros.length} copropriété(s), dont ${copros.filter((c) => c.suivie).length} suivie(s) en plus, données du ${donneesDu}, annuaire : ${ann.lues} fiche(s) lue(s).${absentes.length ? ` Introuvables : ${absentes.join(", ")}.` : ""}`);
 })().catch((e) => { console.error(e.message); process.exit(1); });
