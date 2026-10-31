@@ -9,9 +9,9 @@
   /** Intègre un extrait du registre ({donnees_du, copros}) ; renvoie true s'il est plus récent que celui en base. */
   M.integrerRegistre = (d) => {
     if (!d || !Array.isArray(d.copros) || !d.copros.every((x) => x && x.numero_immatriculation)) throw new Error("Ce fichier n'est pas un extrait du registre des copropriétés.");
-    const avant = S.db.registre, signe = (x) => `${(x.suivies || []).join(",")}|${x.copros.length}`;
+    const avant = S.db.registre, signe = (x) => `${(x.suivies || []).join(",")}|${x.copros.length}|${x.annuaire_le || ""}`; // annuaire en direct : nouvel extrait le même jour
     if (avant && avant.donnees_du && d.donnees_du && avant.copros.length && (d.donnees_du < avant.donnees_du || (d.donnees_du === avant.donnees_du && signe(avant) === signe(d)))) return false; // même jour : liste des suivies modifiée
-    S.db.registre = { donnees_du: d.donnees_du || U.aujourdhui(), recu_le: U.horodatage(), syndic: d.syndic || null,
+    S.db.registre = { donnees_du: d.donnees_du || U.aujourdhui(), annuaire_le: d.annuaire_le || "", recu_le: U.horodatage(), syndic: d.syndic || null,
       suivies: d.suivies || [], introuvables: d.introuvables || [], copros: d.copros };
     cache = null;
     return true;
