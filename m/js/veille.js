@@ -106,13 +106,14 @@
     { id: "gn-immo-loi", nom: "Immobilier : législation", url: gnews('immobilier OR logement (loi OR décret OR "entre en vigueur" OR "nouvelle obligation")') },
     { id: "gn-bail-juris", nom: "Baux : jurisprudence", url: gnews('(bail OR locataire OR bailleur) "Cour de cassation"'), nature: "jurisprudence" },
     { id: "gn-ce-urba", nom: "Conseil d'État : urbanisme / logement", url: gnews('"Conseil d\'État" (urbanisme OR logement OR copropriété)'), nature: "jurisprudence" },
-    { id: "gn-rennes-logement", nom: "Rennes : logement / immobilier", url: gnews("Rennes (logement OR immobilier OR copropriété OR locataires OR propriétaires)"), portee: "local" },
+    { id: "gn-rennes-logement", nom: "Rennes : copropriété, loyers, habitat", url: gnews('Rennes (copropriété OR syndic OR loyers OR "permis de louer" OR bailleurs OR "logement social" OR PLUi)'), portee: "local" },
     { id: "gn-rennes-metropole", nom: "Rennes Métropole : habitat, urbanisme, déchets", url: gnews('"Rennes Métropole" (habitat OR PLUi OR déchets OR urbanisme OR logement)'), portee: "local" },
-    { id: "gn-35", nom: "Ille-et-Vilaine : logement", url: gnews('"Ille-et-Vilaine" (logement OR copropriété OR immobilier)'), portee: "local" },
+    { id: "gn-35", nom: "Ille-et-Vilaine : copropriété, loyers", url: gnews('"Ille-et-Vilaine" (copropriété OR syndic OR loyers OR "permis de louer" OR bailleurs)'), portee: "local" },
     ...V.THEMES.flatMap((t) => t.requetes.map((q, i) => ({ id: `gn-${t.id}-${i + 1}`, nom: `Thème : ${t.libelle}`, url: gnews(q), theme: t.id }))),
-    // organisations professionnelles et presse spécialisée (FNAIM, SNPI et Plurience ne publient pas de flux : suivies par leurs prises de position dans la presse)
+    // organisations professionnelles et presse spécialisée (UNIS : flux RSS ; FNAIM : page presse lue directement ; SNPI et Plurience : par la presse)
     { id: "org-federations", nom: "Fédérations : FNAIM, UNIS, SNPI, Plurience", url: gnews('(FNAIM OR UNIS OR SNPI OR Plurience) (syndic OR copropriété OR "gestion locative" OR loi OR décret)'), organisme: true },
-    { id: "org-unis", nom: "UNIS (unis-immo.fr)", url: gnews("site:unis-immo.fr"), organisme: true },
+    { id: "org-unis", nom: "UNIS : actualités et notes juridiques (flux du site)", url: "https://www.unis-immo.fr/feed", organisme: true },
+    { id: "org-fnaim", nom: "FNAIM : communiqués et prises de position (espace presse)", url: "https://www.fnaim.fr/3568-espace-presse.htm", format: "fnaim", organisme: true },
     { id: "org-anil", nom: "ANIL : analyses juridiques logement (anil.org)", url: gnews("site:anil.org"), organisme: true },
     { id: "org-arc", nom: "ARC : Association des responsables de copropriété", url: "https://arc-copro.fr/feed/", organisme: true },
     { id: "presse-irc", nom: "Edilaix : Informations Rapides de la Copropriété", url: "https://www.edilaix.com/feed/", organisme: true },
@@ -162,6 +163,15 @@
       return { titre, lien, date: dateIso(balise(b, ["pubDate", "published", "updated", "dc:date"])), source, resume: resume.slice(0, 500) };
     }).filter((a) => a.titre && a.lien);
   };
+
+  /** Page presse de la FNAIM (pas de flux RSS) : communiqués et actualités [{titre, lien, date, source, resume}]. */
+  V.lireFnaim = (html) => (String(html).match(/<li class="item">[\s\S]*?<\/li>/gi) || []).map((b) => {
+    const a = b.match(/<h3>\s*<a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!a) return null;
+    const d = (b.match(/class="date">[^<]*?(\d{2})\/(\d{2})\/(\d{4})/) || []);
+    const lien = /^https?:/.test(a[1]) ? a[1] : `https://www.fnaim.fr${a[1].startsWith("/") ? "" : "/"}${a[1]}`;
+    return { titre: V.texte(a[2]), lien, date: d[3] ? `${d[3]}-${d[2]}-${d[1]}` : "", source: "FNAIM", resume: V.texte((b.match(/class="resume">([\s\S]*?)<\/p>/i) || [])[1] || "").slice(0, 500) };
+  }).filter((x) => x && x.titre && /\/(communiquepresse|actualite)\//.test(x.lien));
 
   // ------------------------------------------------------------------ illustration (collecte : lien d'origine et image de l'article)
   /** Identifiant d'un lien Google Actualités (« …/rss/articles/CBMi…?oc=5 »), null sinon. */
@@ -219,6 +229,66 @@
     return groupes.map(({ article, autres }) => ({ article, autres }));
   };
 
+  // ------------------------------------------------------------------ pertinence et sélection du jour (environ 10 articles par jour)
+  /** Sources de référence : organisations professionnelles, institutions, éditeurs juridiques. */
+  const REFERENCES = /unis-immo|fnaim|\bunis\b|anil\b|anil\.org|arc-copro|\barc\b|edilaix|informations rapides de la copropriete|service-public|legifrance|vie-publique|ecologie\.gouv|economie\.gouv|courdecassation|conseil-etat|dalloz|editions-legislatives|efl\.fr|lexbase|landot|actu-juridique|village-justice|anah|adil/;
+  /** Presse régionale hors Bretagne : son actualité locale ne concerne pas le cabinet. */
+  const REGIONALE = /ladepeche|depeche|lindependant|l'independant|midilibre|midi libre|laprovence|la provence|nicematin|nice-matin|varmatin|leprogres|le progres|ledauphine|dauphine libere|lavoixdunord|voix du nord|estrepublicain|est republicain|dna\.fr|dernieres nouvelles d'alsace|sudouest|sud ouest|lanouvellerepublique|la nouvelle republique|centrepresse|larepubliquedespyrenees|corsematin|corse-matin|lamontagne|la montagne|lyonne|courrier-picard|courrier picard|paris-normandie|ouest-eclair|charentelibre|charente libre|le berry|lejsl|bienpublic|le bien public|lunion|l'union|ardennais|ici\.fr|\bici\b|france bleu|francebleu|actu\.fr|lanouvelle/;
+  const FAITS_DIVERS = /poignard|meurtr|assassin|homicide|agress|\bviole?e?\b|\bvole?s? (a|de|chez)\b|cambriol|incendi|\bbrule|explosion|\bdrame\b|tragique|\bmort(e|s)?\b|decede|\bdeces\b|cadavre|corps sans vie|\bblesse|policier|la police|forces de l'ordre|gendarm|interpell|garde a vue|reclusion|\bproces\b|tribunal correctionnel|cour d'assises|condamne a|\bprison|\bballes?\b|\barmes? (a feu|blanche)|fusillade|trafic de|drogue|rixe/;
+  const PAS_FAIT_DIVERS = /obligation|reglement|norme|securite incendie|detecteur|assurance|prevention|loi\b|decret/;
+  const MARCHE = /prix (de l'immobilier|des logements|au m2|du m2)|marche (immobilier|du logement|de l'ancien)|taux (de credit|immobilier|d'interet)|credit immobilier|pret immobilier|investissement locatif|investir|\bscpi\b|rendement locatif|bourse|acheter ou louer|palmares|classement des villes|ou acheter|barometre|notaires de france.*prix|meilleures villes|inabordable|ville(s)? ou (acheter|investir)/;
+  const ENTREPRISES = /\bnomme(e)?\b|nouveau (directeur|president|pdg)|nouvelle (directrice|presidente)|prend la (tete|direction)|entame un nouveau mandat|chiffre d'affaires|resultats (annuels|semestriels)|rachat|acquisition|leve(e)? de fonds|\bsalon\b|inaugur|recrute|recrutement|offres? d'emploi|\bcdd\b|\bcdi\b|\(h\/f\)|start-?up|partenariat|mecenat|anniversaire/;
+  const COPRO = /copropri|\bsyndics?\b|conseil(s|ler)? syndica|assemblee generale|\bag\b|tantiemes|parties communes|fonds de travaux|\bpppt\b|\bppt\b|\bdtg\b|reglement de copro|carnet d'entretien/;
+  const RACOLEUR = /pourquoi (ca|cela)|ce que (vous|ca)|\bvoici\b|\b\d+ (votes|leviers|astuces|travaux|erreurs|choses|conseils|raisons|pieges|questions)\b|vous (laissez|risquez|devez|pouvez)|attention a|ne faites (pas|plus)|les meilleurs/;
+  const EVENEMENT = /rencontre du club|presentation (du )?programme|webinaire|conference|\bforum\b|exposition|dates?, horaires|tarifs\b|spectacle|concert|festival|\bsalon\b/;
+  const ETRANGER = /pologne|espagne|belgique|suisse|maroc|dubai|etats-unis|new york|londres|royaume-uni|allemagne|italie|portugal|canada|quebec|chine|japon|vietnam|algerie|tunisie|senegal|geneve|luxembourg|monaco/;
+  /** Note de pertinence pour un syndic (Rennes) : textes officiels, jurisprudence, copropriété, thèmes suivis, sources de référence ;
+      faits divers, actualité d'autres régions, marché et vie des entreprises pénalisés. */
+  V.score = (a) => {
+    const texte = norm(`${a.titre} ${a.resume || ""}`), titre = norm(a.titre), src = norm(`${a.source || ""} ${V.domaine(a)}`);
+    const officiel = a.nature === "legislation" || a.nature === "jurisprudence";
+    let n = a.domaine === "syndic" ? (COPRO.test(texte) ? 4 : 2) : 1; // « syndic » sans mot de la copropriété (bornes, IRVE…) : moins sûr
+    if (officiel) n += a.domaine === "syndic" ? 4 : 3;
+    if (a.prioritaire) n += 3;
+    if (a.portee === "local") n += 2;
+    if (REFERENCES.test(src) || (a.via || []).some((v) => /^org-|^sp-|^presse-irc/.test(v))) n += 3;
+    if (/\bunis\b|unis-immo|fnaim/.test(src) || (a.via || []).some((v) => v === "org-unis" || v === "org-fnaim")) n += 3; // syndicats professionnels : en tête
+    if (a.manuel) n += 10;
+    if (!officiel && FAITS_DIVERS.test(titre) && !PAS_FAIT_DIVERS.test(titre)) n -= 7;
+    if (!officiel && MARCHE.test(titre)) n -= 3;
+    if (ENTREPRISES.test(titre)) n -= 3;
+    if (ETRANGER.test(titre)) n -= 4;
+    if (a.portee !== "local" && REGIONALE.test(src)) n -= 3;
+    if (RACOLEUR.test(titre)) n -= 2;
+    if (EVENEMENT.test(titre)) n -= 4;
+    if (a.grand_public) n -= 4;
+    if (/^\d{2}\.\d{2}\.\d{2} ?:/.test(a.titre || "") && /anil/.test(src)) n -= 1; // fiches pratiques datées de l'ANIL
+    return n;
+  };
+  V.SEUIL_SELECTION = 4;       // en dessous : jamais retenu
+  V.SEUIL_INCONTOURNABLE = 11; // au-dessus : toujours retenu (texte officiel copropriété, thème prioritaire officiel…)
+  /** Sélection du jour : par jour de collecte, les « parJour » meilleurs sujets (un sujet repris par plusieurs médias compte une fois),
+      au-dessus du seuil, plus les incontournables. Renvoie l'ensemble des id retenus (représentants et articles regroupés). parJour = 0 : tout. */
+  V.selection = (articles, parJour = 10) => {
+    const ids = new Set();
+    const parJourCollecte = new Map();
+    for (const a of articles) { const j = a.trouve_le || a.date || ""; if (!parJourCollecte.has(j)) parJourCollecte.set(j, []); parJourCollecte.get(j).push(a); }
+    for (const liste of parJourCollecte.values()) {
+      const notes = new Map(liste.map((a) => [a.id, a.score ?? V.score(a)]));
+      const groupes = V.regrouper(liste.slice().sort((x, y) => notes.get(y.id) - notes.get(x.id)))
+        .map((g) => ({ ...g, note: Math.max(notes.get(g.article.id), ...g.autres.map((x) => notes.get(x.id))) + Math.min(2, g.autres.length) }))
+        .sort((x, y) => y.note - x.note);
+      let pris = 0;
+      for (const g of groupes) {
+        const garder = !parJour || g.note >= V.SEUIL_INCONTOURNABLE || (pris < parJour && g.note >= V.SEUIL_SELECTION);
+        if (!garder) continue;
+        pris++;
+        ids.add(g.article.id); g.autres.forEach((x) => ids.add(x.id));
+      }
+    }
+    return ids;
+  };
+
   // ------------------------------------------------------------------ identifiants, fusion
   const hash = (s) => { let x = 2166136261; for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 16777619); } return (x >>> 0).toString(36); };
   /** Même titre (à la ponctuation près) = même article, quel que soit le média ou le flux. */
@@ -253,7 +323,9 @@
     if (source.theme && !c.themes.includes(source.theme)) c.themes.push(source.theme);
     if (!c.domaine && source.theme) c.domaine = V.THEME[source.theme].domaine;
     return { ...a, id: V.id(a.titre), ...c, via: [source.id], trouve_le: aujourdhui };
-  }).filter((a) => a.domaine && (!a.date || !aujourdhui || a.date <= aujourdhui) && !V.sourceExclue(a));
+  }).filter((a) => a.domaine && (!a.date || !aujourdhui || (a.date <= aujourdhui && a.date >= recent(aujourdhui))) && !V.sourceExclue(a));
+  /** Articles publiés depuis moins de 60 jours (une page presse ou un flux peut remonter des textes anciens). */
+  const recent = (aujourdhui) => new Date(Date.parse(aujourdhui) - 60 * 864e5).toISOString().slice(0, 10);
 
   K.V = V;
 })(globalThis.K = globalThis.K || {});
