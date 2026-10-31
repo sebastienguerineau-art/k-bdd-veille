@@ -116,3 +116,7 @@ main:has(.mr-envoyer:not([hidden])) { padding-bottom: 84px; } /* le bouton flott
 .m-tuile.alerte::after, .m-tuile.info::after { content: ""; position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: #e9a21b; }
 .m-tuile.alerte::after { background: var(--rouge); }
 .mr-deja { text-transform: none; letter-spacing: 0; font-weight: 600; }
+/* blocs d'état : fond teinté */
+.m-tuile.alerte { background: var(--rouge-clair); border-color: var(--rouge-clair); }
+.m-tuile.info { background: var(--orange-clair); border-color: var(--orange-clair); }
+.m-tuile.alerte::after, .m-tuile.info::after { display: none; }
