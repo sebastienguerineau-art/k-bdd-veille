@@ -110,3 +110,9 @@ main { padding: 14px 16px; max-width: 720px; margin: 0 auto; }
   background: #292d77; color: #fff; font: inherit; font-weight: 700; box-shadow: 0 8px 24px rgba(0, 0, 0, .3); }
 .mr-envoyer[hidden] { display: none; }
 main:has(.mr-envoyer:not([hidden])) { padding-bottom: 84px; } /* le bouton flottant ne cache pas la dernière carte */
+/* refonte sobre (audit UX) : titres en casse normale, indicateurs sans liseré coloré (pastille d'état) */
+.m-h2 { text-transform: none; letter-spacing: 0; font-size: 15px; font-weight: 700; color: var(--gris); }
+.m-tuile, .m-tuile.alerte, .m-tuile.info { border-left-width: 1px; border-left-color: var(--bord); position: relative; }
+.m-tuile.alerte::after, .m-tuile.info::after { content: ""; position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: #e9a21b; }
+.m-tuile.alerte::after { background: var(--rouge); }
+.mr-deja { text-transform: none; letter-spacing: 0; font-weight: 600; }
