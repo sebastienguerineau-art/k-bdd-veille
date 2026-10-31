@@ -673,6 +673,11 @@
     if (oui) S.db.syntheses_cloturees[cle] = { le: U.horodatage() }; else delete S.db.syntheses_cloturees[cle];
     S.sauver();
   };
+  /** Depuis le 01/11/2026, seule la clôture (bouton « Clôturer la synthèse ») rend une synthèse faite. Les synthèses émises
+      jusqu'au 31/10/2026 restent faites si leurs charges sont intégrées (règle précédente, anciennes synthèses inchangées). */
+  M.CLOTURE_OBLIGATOIRE_DEPUIS = "2026-11-01";
+  const emiseAvantCloture = (r) => !!(r && r.envoyee_le) && (U.dateFr(String(r.envoyee_le).slice(0, 10)) || "") < M.CLOTURE_OBLIGATOIRE_DEPUIS;
+  M.emiseAncienneRegle = emiseAvantCloture;
   M.syntheseCloturee = (numero, exercice) => (S.db.syntheses_cloturees || {})[`${numero}|${exercice}`] || null;
   M.etatSynthese = (c, decalage = 0, reference) => {
     const exo = E.exerciceClos(c.exercice, reference).decale(-decalage);
@@ -688,8 +693,8 @@
     const bN = S.db.budgets[cle], chargesN = M.chargesIntegrees(c, exo), cloturee = M.syntheseCloturee(c.numero, exo.libelle);
     const emise = !!(r && r.envoyee_le), sansCharges = emise && !chargesN;
     return {
-      copro: c, exercice: exo, cle, statut: cloturee || (emise && chargesN) || faite ? "envoyee" : r ? "en_cours" : "a_faire",
-      cloturee_le: cloturee ? cloturee.le : "", emise_sans_charges: sansCharges && !faite && !cloturee, charges_n: chargesN, extraction_n_le: bN ? bN.importe_le || "" : "",
+      copro: c, exercice: exo, cle, statut: cloturee || (emiseAvantCloture(r) && chargesN) || faite ? "envoyee" : r ? "en_cours" : "a_faire",
+      cloturee_le: cloturee ? cloturee.le : "", emise_sans_charges: sansCharges && !faite && !cloturee, a_cloturer: emise && !cloturee && !faite && !(emiseAvantCloture(r) && chargesN), charges_n: chargesN, extraction_n_le: bN ? bN.importe_le || "" : "",
       fiche_le: r ? r.modifie_le || "" : "", envoyee_le: (r && r.envoyee_le) || (faite ? faite.le : ""), envoyee_a: (r && r.envoyee_a) || (faite ? "considérée comme faite" : ""),
       faite: !!faite && !(r && r.envoyee_le),
       manquants, exercice_renseigne: !!c.exercice, alerte_honoraires: !!(honos && honos.alerte),

@@ -539,7 +539,7 @@
         const base = { copro: c.numero, nom: c.nom, comptable: c.comptable || "", exercice: exo.libelle };
         const cle = `${c.numero}|${exo.libelle}`, r = S.db.syntheses[cle], faite = (S.db.syntheses_faites || {})[cle];
         const close = exo.fin < aujourdhui;
-        const statut = (r && r.envoyee_le && M.chargesIntegrees(c, exo)) || faite || M.syntheseCloturee(c.numero, exo.libelle) ? "faite" : r ? "en_cours" : close ? "a_faire" : "a_venir";
+        const statut = (M.emiseAncienneRegle(r) && M.chargesIntegrees(c, exo)) || faite || M.syntheseCloturee(c.numero, exo.libelle) ? "faite" : r ? "en_cours" : close ? "a_faire" : "a_venir";
         ajouter({ ...base, date: exo.fin, type: "cloture", titre: `Clôture ${exo.libelle}`, statut: close ? "faite" : "a_venir" });
         ajouter({ ...base, date: `${ajouterMois(exo.fin, 1)}-01`, type: "synthese", titre: `Synthèse ${exo.libelle}`, statut, lien: `#/synthese?copro=${encodeURIComponent(c.numero)}&exercice=${encodeURIComponent(exo.libelle)}` });
         const ag = finMois(ajouterMois(exo.fin, 6));
