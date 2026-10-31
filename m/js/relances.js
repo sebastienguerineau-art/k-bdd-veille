@@ -10,6 +10,31 @@
 
   M.TYPES_RELANCE = { GLOBAL: "Liste des débiteurs (GLOBAL)", RAR: "Mises en demeure (RAR)", RS: "Relances simples (RS)" };
   M.DELAI_SUIVI_MED = 30; // jours après une MED sans paiement : à relancer
+  M.DELAI_RS_MED = 15;    // jours après une relance simple sans paiement : mise en demeure
+  M.SEUIL_CONTENTIEUX = 500; // solde à partir duquel une MED restée sans effet part au contentieux
+  M.SEUIL_RELANCE = 15;   // en dessous : pas de relance
+  M.ETAPES_RELANCE = { rs: "Relance simple", med: "Mise en demeure", med2: "Nouvelle mise en demeure", contentieux: "Contentieux", attendre: "Attendre", suivre: "Suivre", aucune: "Aucune" };
+  const plusJours = (iso, n) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  /** Prochaine étape proposée pour un débiteur : relance simple → mise en demeure → contentieux, selon l'historique et l'évolution du solde. */
+  M.prochaineEtapeRelance = (l, aujourdhui = U.aujourdhui(), rsConnues = true) => {
+    const e = (code, detail, des = "") => ({ code, libelle: M.ETAPES_RELANCE[code], detail, des });
+    if (l.sorti) return e("aucune", "soldé ou plus relançable");
+    if (v(l.solde) < M.SEUIL_RELANCE) return e("aucune", "solde faible");
+    if (/[ée]ch[ée]ancier|accord|plan d.apurement/i.test(l.note || "")) return e("suivre", "échéancier : surveiller les versements");
+    if (l.nb_med) {
+      if (l.delai_med < M.DELAI_SUIVI_MED) return e("attendre", `délai de la mise en demeure du ${U.jjmmaaaa(l.derniere_med)}`, plusJours(l.derniere_med, M.DELAI_SUIVI_MED));
+      if (l.a_relancer) return v(l.solde) >= M.SEUIL_CONTENTIEUX ? e("contentieux", `MED du ${U.jjmmaaaa(l.derniere_med)} sans effet : transmettre (huissier, avocat)`)
+        : e("med2", `MED du ${U.jjmmaaaa(l.derniere_med)} sans effet, solde sous ${M.SEUIL_CONTENTIEUX} €`);
+      return e("suivre", "paiement reçu depuis la mise en demeure");
+    }
+    if (l.derniere_rs) {
+      const j = jours(l.derniere_rs, aujourdhui);
+      if (j < M.DELAI_RS_MED) return e("attendre", `relance simple du ${U.jjmmaaaa(l.derniere_rs)}`, plusJours(l.derniere_rs, M.DELAI_RS_MED));
+      if (l.mouvement !== null && l.mouvement < -0.005) return e("suivre", "paiement reçu depuis la relance simple");
+      return e("med", `relance simple du ${U.jjmmaaaa(l.derniere_rs)} sans paiement`);
+    }
+    return e("rs", l.nouveau ? "nouveau débiteur" : rsConnues ? "aucune relance enregistrée" : "aucune relance simple importée (export RS)");
+  };
 
   /** « 16_10_2026_GLOBAL.csv », « 16-10-2026 RAR.csv »… -> { date: "2026-10-16", type: "RAR" } (null sinon). */
   I.parseNomRelance = (nom) => {
@@ -110,7 +135,7 @@
         a_relancer: !!(derniereMed && g && delaiMed >= M.DELAI_SUIVI_MED && soldeMed !== null && solde >= soldeMed - 0.01),
         note: M.noteRelance(cle),
       };
-    }).sort((a, b) => a.copro.localeCompare(b.copro) || b.solde - a.solde);
+    }).map((l) => ({ ...l, etape: M.prochaineEtapeRelance(l, aujourdhui, anterieures.some((c) => c.RS)) })).sort((a, b) => a.copro.localeCompare(b.copro) || b.solde - a.solde);
     const somme = (l, k) => l.reduce((t, x) => t + v(x[k]), 0);
     const actifs = lignes.filter((l) => !l.sorti);
     return {

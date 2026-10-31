@@ -116,4 +116,109 @@
     const statut = alertes.some((a) => a.niveau === "alerte") ? "alerte" : alertes.some((a) => a.niveau === "attention") ? "attention" : "ok";
     return { statut, rat, r, maj: m, fin_mandat_registre: finReg, alertes };
   };
+
+  // ------------------------------------------------------------------ après l'AG : mandat, PV à la banque, déclaration au registre
+  /* c.ag[exercice] = { date, mandat: "renouvele" | "non_renouvele", pv_banque_le, registre_le } : AG d'approbation des comptes de l'exercice. */
+  M.SEUIL_DEBITEUR_REGISTRE = 300; // nombre de copropriétaires débiteurs de plus de 300 € (déclaration annuelle)
+  M.agCopro = (c, exercice) => ((c.ag || {})[exercice]) || {};
+  M.majAg = (c, exercice, champs) => {
+    c.ag = c.ag || {};
+    const a = { ...(c.ag[exercice] || {}), ...champs };
+    for (const k of Object.keys(a)) if (a[k] === "" || a[k] === null || a[k] === undefined) delete a[k];
+    if (Object.keys(a).length) c.ag[exercice] = a; else delete c.ag[exercice];
+    return a;
+  };
+  /** Mandat à traiter lors de cette AG : non renseigné, expiré, ou se terminant avant l'AG suivante (≈ 12 mois plus tard). */
+  M.mandatATraiter = (c, dateAg) => {
+    const fin = M.finMandat ? M.finMandat(c.mandat) : "";
+    if (!fin) return { motif: "non_renseigne", fin: "" };
+    if (!dateAg) return null;
+    const suivante = ajouterMois(dateAg, 13);
+    return fin <= suivante ? { motif: fin < dateAg ? "expire" : "fin_proche", fin } : null;
+  };
+  /** Renouvellement voté : nouveau mandat (début = AG, fin saisie), l'ancien est gardé pour mémoire. */
+  M.renouvelerMandat = (c, exercice, { debut, fin }) => {
+    if (!debut || !fin || fin <= debut) throw new Error("Indiquez le début et la fin du nouveau mandat (fin après le début).");
+    const avant = c.mandat || {};
+    c.mandat = { ...avant, debut, fin, duree_mois: "", precedent: avant.debut || avant.fin ? { debut: avant.debut || "", fin: M.finMandat(avant) } : avant.precedent };
+    M.majAg(c, exercice, { mandat: "renouvele" });
+  };
+  /** Nouveau mandat proposé : même durée que le précédent (3 ans à défaut), à partir de la date de l'AG. */
+  M.mandatPropose = (c, dateAg) => {
+    const duree = (M.dureeMandat && M.dureeMandat(c.mandat)) || 36;
+    const d = new Date(`${dateAg}T12:00:00Z`); const j = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + duree);
+    d.setUTCDate(Math.min(j, new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate())); d.setUTCDate(d.getUTCDate() - 1);
+    return { debut: dateAg, fin: d.toISOString().slice(0, 10), duree_mois: duree };
+  };
+  /** Données de la mise à jour annuelle du registre, préparées depuis l'appli (à vérifier avant de les recopier). */
+  M.declarationRegistre = (c, exo) => {
+    const a = M.agCopro(c, exo.libelle), b = S.db.budgets[`${c.numero}|${exo.libelle}`];
+    const tc = b && M.totauxCourants ? M.totauxCourants(b) : null, tg = b ? (b.lignes.find((l) => l.total === "general") || {}) : {};
+    const bal = M.balanceCopro ? M.balanceCopro(c.numero) : null, bil = M.bilanCopro ? M.bilanCopro(c) : null;
+    const fournisseurs = bal ? U.arrondi(bal.comptes.filter((x) => /^40/.test(x.compte)).reduce((t, x) => t - x.solde, 0), 2) : null;
+    const src = { budget: b ? `extraction ${exo.libelle}` : "extraction absente", balance: bal ? `balance du ${U.jjmmaaaa(bal.date)}` : "balance absente" };
+    const lots = String(c.lots_surface || "").toUpperCase() === "LOTS" ? Number(c.quantite) || null : null;
+    const m = c.mandat || {};
+    return [
+      { cle: "exercice", libelle: "Exercice comptable", valeur: `du ${U.jjmmaaaa(exo.debut)} au ${U.jjmmaaaa(exo.fin)}` },
+      { cle: "ag", libelle: "Date de l'AG d'approbation des comptes", valeur: a.date ? U.jjmmaaaa(a.date) : "", source: "saisie ci-dessus" },
+      { cle: "courantes", libelle: "Charges pour opérations courantes", valeur: tc && tc.charges !== null ? U.euro(tc.charges) : "", source: src.budget },
+      { cle: "travaux", libelle: "Charges pour travaux et opérations exceptionnelles", valeur: tc && tg.charges !== null && tg.charges !== undefined ? U.euro(U.arrondi(tg.charges - tc.charges, 2)) : "", source: src.budget },
+      { cle: "fournisseurs", libelle: "Dettes fournisseurs, rémunérations et autres", valeur: fournisseurs !== null ? U.euro(Math.max(0, fournisseurs)) : "", source: src.balance },
+      { cle: "impayes", libelle: "Sommes restant dues par les copropriétaires", valeur: bil ? U.euro(bil.total_debiteurs) : "", source: src.balance },
+      { cle: "debiteurs", libelle: `Copropriétaires débiteurs de plus de ${M.SEUIL_DEBITEUR_REGISTRE} €`, valeur: bil ? String(bil.debiteurs.filter((x) => x.solde > M.SEUIL_DEBITEUR_REGISTRE).length) : "", source: src.balance },
+      { cle: "fonds_travaux", libelle: "Montant du fonds de travaux", valeur: bil ? U.euro(Math.max(0, bil.solde_105 || 0)) : "", source: src.balance },
+      { cle: "mandat", libelle: "Mandat du syndic", valeur: m.debut || M.finMandat(m) ? `${m.debut ? `du ${U.jjmmaaaa(m.debut)} ` : ""}au ${U.jjmmaaaa(M.finMandat(m))}` : "", source: "fiche copro" },
+      { cle: "lots", libelle: "Nombre de lots", valeur: lots ? String(lots) : "", source: "fiche copro" },
+    ];
+  };
+  /** Process après l'AG d'approbation des comptes de l'exercice : étapes et avancement. */
+  M.apresAg = (c, exo) => {
+    const a = M.agCopro(c, exo.libelle), mandat = M.mandatATraiter(c, a.date);
+    const k = M.controleRegistre ? M.controleRegistre(c) : null, majReg = k && k.r ? k.r.date_derniere_maj || "" : "";
+    const etapes = [{ id: "date", titre: "Date de l'AG", fait: !!a.date }];
+    if (a.date && (mandat || a.mandat)) etapes.push({ id: "mandat", titre: "Mandat de syndic", fait: !!a.mandat, mandat });
+    if (a.mandat === "renouvele") etapes.push({ id: "pv_banque", titre: "PV à la conseillère bancaire", fait: !!a.pv_banque_le });
+    if (a.date) etapes.push({ id: "registre", titre: "Déclaration au registre", fait: !!a.registre_le || (!!majReg && majReg >= a.date), auto: !a.registre_le && !!majReg && majReg >= a.date });
+    return { exo, ag: a, mandat, etapes, fini: etapes.every((e) => e.fait), commence: !!a.date };
+  };
+  /** Process post-AG commencés et non terminés (tableau de bord). */
+  M.apresAgEnCours = (portefeuille = "") => S.copros().filter((c) => c.actif && M.dansPortefeuille(c, portefeuille))
+    .map((c) => M.apresAg(c, E.exerciceClos(c.exercice || "01/01 au 31/12"))).filter((x) => x.commence && !x.fini);
+
+  // ------------------------------------------------------------------ contrôle réglementaire (synthèse) : avance de trésorerie
+  M.PART_AVANCE_MAX = 1 / 6;   // avance de trésorerie permanente : au plus 1/6 du budget prévisionnel
+  /** Budget prévisionnel de référence : budget de l'exercice en cours (N+1 de l'extraction N), sinon budget N. */
+  M.budgetReference = (c, exo) => {
+    const b = S.db.budgets[`${c.numero}|${exo.libelle}`], t = b && M.totauxCourants ? M.totauxCourants(b) : null;
+    if (!t) return null;
+    return t.budget_n1 ? { montant: t.budget_n1, exercice: exo.decale(1).libelle } : t.budget ? { montant: t.budget, exercice: exo.libelle } : null;
+  };
+  M.controlesReglementaires = (c, exo) => {
+    const ref = M.budgetReference(c, exo), bil = M.bilanCopro ? M.bilanCopro(c) : null, res = [];
+    if (!ref) return res;
+    if (bil && bil.avance >= 0.005) {
+      const max = U.arrondi(ref.montant * M.PART_AVANCE_MAX, 2), ok = bil.avance <= max + 1;
+      res.push({ id: "avance", ok, titre: "Avance de trésorerie", texte: ok ? `${U.euro(bil.avance)} : dans la limite du 1/6 du budget (${U.euro(max)})`
+        : `${U.euro(bil.avance)} au-dessus du 1/6 du budget ${ref.exercice} (${U.euro(max)} au plus)` });
+    }
+    return res;
+  };
+
+  // ------------------------------------------------------------------ avant la clôture : sous-compteurs à relever, comptes d'attente à solder
+  M.JOURS_AVANT_CLOTURE = 30;
+  /** Copros dont l'exercice en cours se clôture dans les 30 jours : sous-compteurs à relever, comptes d'attente non soldés. */
+  M.avantCloture = (portefeuille = "", aujourdhui = U.aujourdhui()) => {
+    const res = { sous_compteurs: [], attente: [] };
+    for (const c of S.copros().filter((x) => x.actif && M.dansPortefeuille(x, portefeuille))) {
+      const exo = E.exerciceClos(c.exercice || "01/01 au 31/12", aujourdhui).decale(1); // exercice en cours
+      const jours = Math.round((Date.parse(exo.fin) - Date.parse(aujourdhui)) / 864e5);
+      if (jours < 0 || jours > M.JOURS_AVANT_CLOTURE) continue;
+      const sc = (c.sous_compteurs || []).filter((x) => !(x.releves || {})[exo.libelle]);
+      if (sc.length) res.sous_compteurs.push({ c, exo, jours, n: sc.length });
+      const b = M.bilanCopro ? M.bilanCopro(c) : null;
+      if (b && b.attente.length) res.attente.push({ c, exo, jours, n: b.attente.length, total: U.arrondi(b.attente.reduce((t, x) => t + Math.abs(x.solde), 0), 2) });
+    }
+    return res;
+  };
 })(globalThis.K = globalThis.K || {});
