@@ -40,6 +40,9 @@
   const lienCopro = (c) => `#/copro/${encodeURIComponent(c.numero)}`;
 
   // ------------------------------------------------------------------ accueil
+  const JOURS_BASE_ANCIENNE = 2;
+  /** Âge de la base chargée en jours (date de la sauvegarde), null si inconnu. */
+  const ageBase = () => { const b = base(), t = b && b.base_du ? Date.parse(b.base_du) : NaN; return Number.isNaN(t) ? null : Math.floor((Date.now() - t) / 864e5); };
   const vueAccueil = () => {
     const pf = portefeuille(), actives = coprosPf();
     const suivi = M.suiviSyntheses(pf), aFaire = suivi.filter((l) => l.statut !== "envoyee");
@@ -53,7 +56,11 @@
     const tuile = (n, l, lien, cls = "") => `<a class="m-tuile ${n ? cls : "ok"}" href="${lien}"><b>${n}</b><span>${l}</span></a>`;
     const auj = U.aujourdhui(), fin = U.decalerJours(auj, 45);
     const ev = M.calendrier(auj.slice(0, 7), 3, pf).filter((e) => e.date >= auj && e.date <= fin && e.statut !== "faite").sort((a, b) => a.date.localeCompare(b.date));
-    return `<label class="m-pf">Portefeuille <select id="m-pf">${optionsPortefeuille()}</select></label>
+    const age = ageBase();
+    return `${age !== null && age > JOURS_BASE_ANCIENNE ? `<div class="m-base-ancienne"><div><b>Base du ${h(new Date(base().base_du).toLocaleDateString("fr-FR"))}</b>
+        <span>il y a ${age} jours : rechargez la dernière sauvegarde OneDrive</span></div>
+        <label class="m-bouton primaire">Recharger la base<input type="file" data-charger-base hidden></label></div>` : ""}
+      <label class="m-pf">Portefeuille <select id="m-pf">${optionsPortefeuille()}</select></label>
       <div class="m-tuiles">
         ${tuile(aFaire.length, "synthèses à faire", "#/copros?f=synthese", "info")}
         ${tuile(todos.length, "tâches ouvertes", "#/taches", "info")}
@@ -192,24 +199,25 @@
     const b = base();
     return `<h1 class="m-h1">Base</h1>
       ${b ? `<div class="m-carte">${ligne("Fichier", h(b.fichier))}${ligne("Sauvegarde du", h(b.fichier_du))}${ligne("Chargée le", h(b.charge_le))}${ligne("Copros", Object.keys(S.db.copros).length)}</div>` : ""}
-      <label class="m-bouton primaire">${b ? "Recharger depuis OneDrive" : "Charger la base depuis OneDrive"}<input type="file" id="m-fichier" hidden></label>
+      <label class="m-bouton primaire">${b ? "Recharger depuis OneDrive" : "Charger la base depuis OneDrive"}<input type="file" id="m-fichier" data-charger-base hidden></label>
       <p class="m-aide">Dans la fenêtre qui s'ouvre, choisissez <b>OneDrive</b> puis <b>BASE DE DONNÉES › K-BDD - sauvegarde.json</b>.
         Sur iPhone : « Parcourir » › OneDrive. Sur Android : menu ☰ › OneDrive.</p>
       <p class="m-aide">Consultation seule : rien n'est modifié ni envoyé. La base reste dans ce téléphone jusqu'à son effacement.</p>
       ${b ? '<button class="m-bouton danger" id="m-effacer">Effacer la base de ce téléphone</button>' : ""}`;
   };
+  /** Choix du fichier de sauvegarde (page Base ou bandeau « base ancienne » de l'accueil). */
+  const brancherChargement = () => $$("[data-charger-base]").forEach((x) => x.addEventListener("change", async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try {
+      const texte = await f.text(), d = JSON.parse(texte);
+      S.restaurer(texte);
+      memo.set("base", { fichier: f.name, fichier_du: new Date(f.lastModified).toLocaleString("fr-FR"), base_du: d.modifie_le || "", charge_le: new Date().toLocaleString("fr-FR") });
+      message(`Base chargée : ${Object.keys(S.db.copros).length} copros.`);
+      if ((location.hash || "#/") === "#/") afficher(); else location.hash = "#/";
+    } catch (err) { message(`Fichier illisible : ${err.message}`, true); }
+  }));
   const brancherBase = () => {
-    $("#m-fichier").addEventListener("change", async (e) => {
-      const f = e.target.files[0];
-      if (!f) return;
-      try {
-        const texte = await f.text(), d = JSON.parse(texte);
-        S.restaurer(texte);
-        memo.set("base", { fichier: f.name, fichier_du: new Date(f.lastModified).toLocaleString("fr-FR"), base_du: d.modifie_le || "", charge_le: new Date().toLocaleString("fr-FR") });
-        message(`Base chargée : ${Object.keys(S.db.copros).length} copros.`);
-        location.hash = "#/";
-      } catch (err) { message(`Fichier illisible : ${err.message}`, true); }
-    });
     const b = $("#m-effacer");
     if (b) b.addEventListener("click", async () => {
       if (!confirm("Effacer la base K-BDD de ce téléphone ?")) return;
@@ -405,6 +413,7 @@
     if (r.page === "copros") brancherCopros();
     if (r.page === "copro") brancherCopro();
     if (r.page === "base") brancherBase();
+    brancherChargement();
     if (r.page === "releves") brancherReleves();
     const pf = $("#m-pf");
     if (pf) pf.addEventListener("change", () => { memo.set("portefeuille", pf.value || "*"); afficher(); });

@@ -120,3 +120,8 @@ main:has(.mr-envoyer:not([hidden])) { padding-bottom: 84px; } /* le bouton flott
 .m-tuile.alerte { background: var(--rouge-clair); border-color: var(--rouge-clair); }
 .m-tuile.info { background: var(--orange-clair); border-color: var(--orange-clair); }
 .m-tuile.alerte::after, .m-tuile.info::after { display: none; }
+/* accueil : base ancienne (plus de 2 jours) */
+.m-base-ancienne { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 12px 14px; border-radius: 14px; background: var(--orange-clair); border: 1px solid var(--orange-clair); }
+.m-base-ancienne > div { flex: 1; display: flex; flex-direction: column; font-size: 14px; }
+.m-base-ancienne span { color: var(--gris); font-size: 13px; }
+.m-base-ancienne .m-bouton { margin: 0; width: auto; white-space: nowrap; padding: 10px 14px; }
