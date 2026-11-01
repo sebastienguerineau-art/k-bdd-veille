@@ -1,7 +1,7 @@
 /* Relevé de sous-compteurs confié à une autre personne (lien envoyé depuis K-BDD) : page autonome, sans base ni compte.
    La liste des compteurs est dans le lien (après « # », jamais envoyée au serveur) ; les saisies restent dans ce téléphone
    jusqu'à l'envoi d'un fichier de relevés au format K-BDD, à ranger dans OneDrive › BASE DE DONNÉES › RESSOURCES › RELEVÉS. */
-(function () {
+(async function () {
   "use strict";
   const TYPE_FICHIER = "kbdd-releves-sous-compteurs";
   const $ = (s, el = document) => el.querySelector(s), $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
@@ -13,9 +13,17 @@
   const UNITE = { elec: "kWh", eau: "m³" }, ICONE = { elec: "⚡", eau: "💧" };
 
   const page = $("#m-page");
+  /** Lien court (« z… » : tableau compact compressé) ou premier format (JSON en base64url). */
+  const decoder = async (t) => {
+    const octets = (x) => Uint8Array.from(atob(x.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+    if (t[0] !== "z") return JSON.parse(decodeURIComponent(escape(atob(t.replace(/-/g, "+").replace(/_/g, "/")))));
+    const brut = await new Response(new Blob([octets(t.slice(1))]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text();
+    const [, copro, nom, exercice, cloture, retour, ...sc] = JSON.parse(brut), long = (x) => (/^\d{8}$/.test(x || "") ? `${x.slice(0, 4)}-${x.slice(4, 6)}-${x.slice(6)}` : "");
+    return { copro, nom, exercice, cloture: long(cloture), retour, cree_le: "", sc: sc.map(([id, n, e, ty, idx, dt, an, fait]) => ({ id, nom: n, emplacement: e, type: ty === "e" ? "eau" : "elec",
+      dernier: idx === null || idx === undefined ? null : { index: idx, date: long(dt), exercice: "" }, an, fait: !!fait })) };
+  };
   let d;
-  try { d = JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(1).replace(/^d=/, "").replace(/-/g, "+").replace(/_/g, "/"))))); }
-  catch (e) { d = null; }
+  try { d = await decoder(location.hash.slice(1).replace(/^d=/, "")); } catch (e) { d = null; }
   if (!d || !Array.isArray(d.sc)) {
     page.innerHTML = '<h1 class="m-h1">Lien incomplet</h1><p class="m-muted">Ce lien de relevé est incomplet ou abîmé. Demandez à la personne qui vous l\'a envoyé de le renvoyer.</p>';
     return;

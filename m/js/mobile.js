@@ -342,10 +342,16 @@
       }));
     });
     const partage = $("#mr-partager");
-    if (partage) partage.addEventListener("click", async () => {
+    // lien préparé dès l'affichage : le partage de l'iPhone doit s'ouvrir aussitôt après le toucher
+    const lienPartage = (async () => {
       const c = S.copro($("#mr-copro").value), [role, prenom] = String(portefeuille()).split(":");
       const moi = (S.db.personnes || []).find((p) => p.role === role && p.prenom === prenom);
-      const url = `${new URL("releve.html", location.href).href.split("#")[0]}#${M.encoderReleveExterne(M.releveExterne(c, moi ? String(moi.emails || "").split(/[;,]/)[0].trim() : ""))}`;
+      return `${new URL("releve.html", location.href).href.split("#")[0]}#${await M.encoderReleveCourt(M.releveExterne(c, moi ? String(moi.emails || "").split(/[;,]/)[0].trim() : ""))}`;
+    })();
+    let urlPrete = "";
+    lienPartage.then((u) => { urlPrete = u; }, () => {});
+    if (partage) partage.addEventListener("click", async () => {
+      const c = S.copro($("#mr-copro").value), url = urlPrete || (await lienPartage);
       const texte = `Peux-tu relever les sous-compteurs de la copropriété ${c.numero} ${c.nom} ? Ouvre ce lien, saisis chaque index avec une photo, puis « Envoyer » et renvoie-moi le fichier.`;
       try {
         if (navigator.share) await navigator.share({ title: `Relevé des sous-compteurs ${c.numero}`, text: texte, url });

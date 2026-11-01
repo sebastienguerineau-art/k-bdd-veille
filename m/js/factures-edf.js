@@ -658,6 +658,23 @@
   };
   M.encoderReleveExterne = (d) => btoa(unescape(encodeURIComponent(JSON.stringify(d)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   M.decoderReleveExterne = (t) => JSON.parse(decodeURIComponent(escape(atob(String(t).replace(/-/g, "+").replace(/_/g, "/")))));
+  /* Lien court : tableau compact (sans noms de champs, sans adresse) compressé (deflate) puis en base64url, préfixe « z ».
+     [2, copro, nom, exercice, clôture AAAAMMJJ, retour, [id, nom, emplacement, "e" si eau, dernier index, date AAAAMMJJ, conso N-1, 1 si déjà relevé]…] */
+  const b64url = (octets) => { let t = ""; for (const o of octets) t += String.fromCharCode(o); return btoa(t).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+  const octetsB64url = (t) => { const s = atob(String(t).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(s, (c) => c.charCodeAt(0)); };
+  const flux = async (octets, transfo) => new Uint8Array(await new Response(new Blob([octets]).stream().pipeThrough(transfo)).arrayBuffer());
+  const court = (iso) => String(iso || "").replace(/-/g, ""), long = (t) => (/^\d{8}$/.test(t || "") ? `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6)}` : "");
+  M.encoderReleveCourt = async (d) => {
+    const c = [2, d.copro, d.nom, d.exercice, court(d.cloture), d.retour || "", ...d.sc.map((x) => [x.id, x.nom, x.emplacement || "", x.type === "eau" ? "e" : "",
+      x.dernier ? x.dernier.index : null, x.dernier ? court(x.dernier.date) : "", x.an ?? null, x.fait ? 1 : 0])];
+    return "z" + b64url(await flux(new TextEncoder().encode(JSON.stringify(c)), new CompressionStream("deflate-raw")));
+  };
+  M.decoderReleveCourt = async (t) => {
+    const c = JSON.parse(new TextDecoder().decode(await flux(octetsB64url(String(t).slice(1)), new DecompressionStream("deflate-raw"))));
+    const [, copro, nom, exercice, cloture, retour, ...sc] = c;
+    return { v: 2, copro, nom, exercice, cloture: long(cloture), retour, sc: sc.map(([id, n, e, ty, idx, dt, an, fait]) => ({ id, nom: n, emplacement: e, type: ty === "e" ? "eau" : "elec",
+      dernier: idx === null || idx === undefined ? null : { index: idx, date: long(dt), exercice: "" }, an, fait: !!fait })) };
+  };
   /** Exercice d'un relevé : celui dont la clôture est la plus proche de sa date (un relevé se fait à la clôture) ;
       doute si la date est à plus de 75 jours de cette clôture. */
   M.exercicePourReleve = (c, date) => {
