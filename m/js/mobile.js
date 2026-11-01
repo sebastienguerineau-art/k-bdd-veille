@@ -296,8 +296,9 @@
     const cachés = sel.c.sous_compteurs.length - montrer.length;
     return `<div class="mr-entete"><h1 class="m-h1">Relevés</h1><span class="mr-compte" id="mr-compte">${faits} / ${total} saisi${faits > 1 ? "s" : ""}</span></div>
       <label class="m-pf"><select id="mr-copro" aria-label="Copro">${candidates.map(option).join("")}</select></label>
-      <p class="mr-cloture">Clôture du <b>${U.jjmmaaaa(sel.exo.fin)}</b> (exercice ${h(sel.exo.libelle)})
-        · <button type="button" class="mr-partager" id="mr-partager" title="Envoyer un lien de relevé à une autre personne (gestionnaire…)">Faire relever par quelqu'un ↗</button></p>
+      <p class="mr-cloture">Clôture du <b>${U.jjmmaaaa(sel.exo.fin)}</b> (exercice ${h(sel.exo.libelle)})</p>
+      <button type="button" class="m-bouton mr-partager" id="mr-partager"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>
+        Faire relever par quelqu'un</button>
       ${liste.map((c) => montrer.map((x) => carte(c, x)).join("")).join("")}
       ${!montrer.length ? `<p class="m-vide-ok">✓ Tous les sous-compteurs sont relevés pour cette clôture.</p>` : ""}
       ${cachés || tous ? `<button class="m-bouton" id="mr-tous">${tous ? "Masquer les déjà relevés" : `Voir aussi les déjà relevés (${cachés})`}</button>` : ""}
