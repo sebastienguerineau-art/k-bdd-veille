@@ -638,6 +638,26 @@
   };
   // ------------------------------------------------------------------ relevés saisis sur le téléphone (fichier déposé dans RESSOURCES\RELEVÉS)
   M.TYPE_FICHIER_RELEVES = "kbdd-releves-sous-compteurs";
+  /** Conso de l'exercice précédent (deux derniers relevés), pour repérer une conso anormale ; null si inconnue. */
+  M.consoPrecedenteSc = (x) => {
+    const fin = (e) => (String(e).match(/\d{4}/g) || [""]).pop();
+    const ex = Object.keys(x.releves || {}).sort((a, b) => fin(b).localeCompare(fin(a)));
+    if (ex.length < 2) return null;
+    const a = x.releves[ex[0]], b = x.releves[ex[1]];
+    return a.ancien_final !== undefined ? a.ancien_final - b.index + a.index : a.index - b.index;
+  };
+  /** Relevé confié à une autre personne : sous-compteurs d'une copro (sans relevé pour la clôture visée d'abord), placés dans un lien.
+      Aucune donnée n'est stockée en ligne : tout tient dans le lien (après « # », jamais envoyé au serveur). */
+  M.releveExterne = (c, retour = "") => {
+    const { exo } = M.exercicePourReleve(c, U.aujourdhui());
+    const sc = M.sousCompteurs(c).slice().sort((a, b) => !!(a.releves || {})[exo.libelle] - !!(b.releves || {})[exo.libelle]);
+    return { v: 1, copro: c.numero, nom: c.nom || "", adresse: [c.adresse, c.code_postal, c.ville].filter(Boolean).join(" "), exercice: exo.libelle, cloture: exo.fin,
+      retour, cree_le: U.aujourdhui(), sc: sc.map((x) => { const d = M.dernierReleve(x);
+        return { id: x.id, nom: x.nom, emplacement: x.emplacement || "", type: M.typeSc(x), dernier: d ? { index: d.index, date: d.date || "", exercice: d.exercice } : null,
+          an: M.consoPrecedenteSc(x), fait: !!(x.releves || {})[exo.libelle] }; }) };
+  };
+  M.encoderReleveExterne = (d) => btoa(unescape(encodeURIComponent(JSON.stringify(d)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  M.decoderReleveExterne = (t) => JSON.parse(decodeURIComponent(escape(atob(String(t).replace(/-/g, "+").replace(/_/g, "/")))));
   /** Exercice d'un relevé : celui dont la clôture est la plus proche de sa date (un relevé se fait à la clôture) ;
       doute si la date est à plus de 75 jours de cette clôture. */
   M.exercicePourReleve = (c, date) => {
@@ -656,7 +676,7 @@
     let d;
     try { d = JSON.parse(texte); } catch (e) { throw new Error("Fichier de relevés illisible."); }
     if (!d || d.type !== M.TYPE_FICHIER_RELEVES || !Array.isArray(d.releves)) throw new Error("Ce fichier n'est pas un fichier de relevés K-BDD.");
-    return { cree_le: d.cree_le || "", lignes: d.releves.map((r, i) => {
+    return { cree_le: d.cree_le || "", releve_par: d.releve_par || "", externe: !!d.externe, lignes: d.releves.map((r, i) => {
       const c = S.copro(String(r.copro || "")), x = c && M.sousCompteurs(c).find((y) => y.id === r.sous_compteur);
       const base = { n: i, copro: r.copro, nom: r.nom || "", date: r.date || "", index: r.index, ancien_final: r.ancien_final ?? "", photo: r.photo || "" };
       if (!c || !x) return { ...base, erreur: "sous-compteur introuvable dans la base (supprimé ?)" };

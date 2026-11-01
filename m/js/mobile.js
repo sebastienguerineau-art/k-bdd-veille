@@ -296,7 +296,8 @@
     const cachés = sel.c.sous_compteurs.length - montrer.length;
     return `<div class="mr-entete"><h1 class="m-h1">Relevés</h1><span class="mr-compte" id="mr-compte">${faits} / ${total} saisi${faits > 1 ? "s" : ""}</span></div>
       <label class="m-pf"><select id="mr-copro" aria-label="Copro">${candidates.map(option).join("")}</select></label>
-      <p class="mr-cloture">Clôture du <b>${U.jjmmaaaa(sel.exo.fin)}</b> (exercice ${h(sel.exo.libelle)})</p>
+      <p class="mr-cloture">Clôture du <b>${U.jjmmaaaa(sel.exo.fin)}</b> (exercice ${h(sel.exo.libelle)})
+        · <button type="button" class="mr-partager" id="mr-partager" title="Envoyer un lien de relevé à une autre personne (gestionnaire…)">Faire relever par quelqu'un ↗</button></p>
       ${liste.map((c) => montrer.map((x) => carte(c, x)).join("")).join("")}
       ${!montrer.length ? `<p class="m-vide-ok">✓ Tous les sous-compteurs sont relevés pour cette clôture.</p>` : ""}
       ${cachés || tous ? `<button class="m-bouton" id="mr-tous">${tous ? "Masquer les déjà relevés" : `Voir aussi les déjà relevés (${cachés})`}</button>` : ""}
@@ -339,6 +340,17 @@
         if (k === "remplace") return maj({ remplace: ch.checked }, true);
         await maj({ [k]: ch.value.trim() }, false);
       }));
+    });
+    const partage = $("#mr-partager");
+    if (partage) partage.addEventListener("click", async () => {
+      const c = S.copro($("#mr-copro").value), [role, prenom] = String(portefeuille()).split(":");
+      const moi = (S.db.personnes || []).find((p) => p.role === role && p.prenom === prenom);
+      const url = `${new URL("releve.html", location.href).href.split("#")[0]}#${M.encoderReleveExterne(M.releveExterne(c, moi ? String(moi.emails || "").split(/[;,]/)[0].trim() : ""))}`;
+      const texte = `Peux-tu relever les sous-compteurs de la copropriété ${c.numero} ${c.nom} ? Ouvre ce lien, saisis chaque index avec une photo, puis « Envoyer » et renvoie-moi le fichier.`;
+      try {
+        if (navigator.share) await navigator.share({ title: `Relevé des sous-compteurs ${c.numero}`, text: texte, url });
+        else { await navigator.clipboard.writeText(`${texte}\n${url}`); message("Lien copié : collez-le dans un message."); }
+      } catch (e) { if (e.name !== "AbortError") message(`Partage impossible : ${e.message}`, true); }
     });
     const copro = $("#mr-copro");
     if (copro) copro.addEventListener("change", () => { memo.set("releves.copro", copro.value); afficher(); });
