@@ -138,7 +138,9 @@
     const c = facturesElec(), d0 = jour(debut), f0 = jour(fin) + 1;
     const lignes = c ? [...new Set(comptes.map(sansZeros))].flatMap((z) => c.parCompte[z] || []).filter((x) => x.j >= d0 && x.j < f0) : [];
     const dates = lignes.map((x) => x.df).sort();
-    return { kwh: Math.round(lignes.reduce((t, x) => t + (x.k || 0), 0)), ttc: U.arrondi(lignes.reduce((t, x) => t + (x.t || 0), 0), 2), n: lignes.length, du: dates[0] || "", au: dates[dates.length - 1] || "" };
+    return { kwh: Math.round(lignes.reduce((t, x) => t + (x.k || 0), 0)), ttc: U.arrondi(lignes.reduce((t, x) => t + (x.t || 0), 0), 2),
+      ht: lignes.every((x) => x.ht !== null && x.ht !== undefined) ? U.arrondi(lignes.reduce((t, x) => t + (x.ht || 0), 0), 2) : null, // HT de chaque facture (export EDF) : TVA = TTC − HT
+      n: lignes.length, du: dates[0] || "", au: dates[dates.length - 1] || "" };
   };
   M.etendueFactures = () => { const c = facturesElec(); return c ? { du: isoJour(c.d0), au: isoJour(c.f0 - 1) } : {}; };
   /** Somme des factures émises dans [d0, f0[. */
@@ -563,16 +565,35 @@
   M.TYPES_SOUS_COMPTEUR = { elec: { libelle: "Électricité", unite: "kWh", icone: "⚡" }, eau: { libelle: "Eau", unite: "m³", icone: "💧" } };
   M.typeSc = (x) => (x && x.type === "eau" ? "eau" : "elec");
   M.uniteSc = (x) => M.TYPES_SOUS_COMPTEUR[M.typeSc(x)].unite;
-  /** Factures d'eau d'un exercice saisies pour la copro : {ttc, m3} ou null. */
+  /** Factures d'eau d'un exercice saisies pour la copro : {ttc, tva, ht, m3} ou null (tva : montant de TVA des factures, HT = TTC − TVA). */
   M.facturesEau = (c, exo) => ((c.factures_eau || {})[exo] || null);
-  M.definirFacturesEau = (c, exo, { ttc = "", m3 = "" } = {}) => {
-    const t = String(ttc ?? "").trim() === "" ? null : U.nombreFr(ttc), v = String(m3 ?? "").trim() === "" ? null : U.nombreFr(m3);
-    if ((t !== null && t < 0) || (v !== null && v < 0) || (String(ttc ?? "").trim() !== "" && t === null) || (String(m3 ?? "").trim() !== "" && v === null)) throw new Error("Montant ou volume invalide.");
+  M.definirFacturesEau = (c, exo, { ttc = "", tva = "", m3 = "" } = {}) => {
+    const lire = (x, nom) => { const s = String(x ?? "").trim(); if (s === "") return null; const n = U.nombreFr(s); if (n === null || n < 0) throw new Error(`${nom} invalide.`); return n; };
+    const t = lire(ttc, "Montant TTC"), tv = lire(tva, "Montant de TVA"), v = lire(m3, "Volume");
+    if (t !== null && tv !== null && tv > t) throw new Error("La TVA ne peut pas dépasser le TTC.");
     c.factures_eau = c.factures_eau || {};
-    if (t === null && v === null) delete c.factures_eau[exo]; else c.factures_eau[exo] = { ttc: t, m3: v };
+    if (t === null && v === null && tv === null) { delete c.factures_eau[exo]; return; }
+    c.factures_eau[exo] = { ttc: t, m3: v, tva: tv, ht: t !== null && tv !== null ? U.arrondi(t - tv, 2) : null };
   };
   M.STATUTS_SOUS_COMPTEUR = { a_relever: "à relever", index_initial: "index de départ", index_incoherent: "index incohérent", sans_edf: "factures EDF manquantes", sans_eau: "eau facturée à saisir",
-    sans_extraction: "extraction à importer", a_passer: "écriture à passer", passee: "écriture passée", ecart: "écart", meme_poste: "même compte : non contrôlable" };
+    sans_extraction: "extraction à importer", a_passer: "écriture à passer", passee: "écriture passée", ecart: "écart", ecart_valide: "écart validé", index_accepte: "index accepté", meme_poste: "même compte : non contrôlable" };
+  /** Écart d'écriture accepté à la main (écritures de correction…) : mémorisé sur le relevé de l'exercice avec les montants du moment ;
+      si l'écart change (nouvelle extraction, nouveau relevé), l'écriture revient en « écart ». */
+  M.signatureEcartSc = (l) => [l.montant, l.depart && l.depart.reel, l.arrivee && l.arrivee.reel].map((v) => (v === null || v === undefined ? "" : U.arrondi(v, 2))).join("|");
+  M.validerEcartSc = (c, id, exercice, signature, motif) => {
+    const x = M.sousCompteurs(c).find((y) => y.id === id);
+    if (!x || !x.releves[exercice]) throw new Error("Relevé introuvable.");
+    x.releves[exercice].ecart_valide = { signature, motif: String(motif || "").trim() || "écart accepté", le: U.horodatage() };
+  };
+  /** Index incohérent accepté à la main (correction passée à part) : lié aux index du moment (N, N-1, ancien compteur). */
+  M.signatureIndexSc = (r, p) => [r && r.index, r && r.ancien_final, p && p.index].map((v) => (v === null || v === undefined ? "" : v)).join("|");
+  M.accepterIndexSc = (c, id, exercice, exoPrecedent, motif) => {
+    const x = M.sousCompteurs(c).find((y) => y.id === id);
+    if (!x || !x.releves[exercice]) throw new Error("Relevé introuvable.");
+    x.releves[exercice].index_accepte = { signature: M.signatureIndexSc(x.releves[exercice], x.releves[exoPrecedent]), motif: String(motif || "").trim() || "index accepté", le: U.horodatage() };
+  };
+  M.refuserIndexSc = (c, id, exercice) => { const x = M.sousCompteurs(c).find((y) => y.id === id); if (x && x.releves[exercice]) delete x.releves[exercice].index_accepte; };
+  M.annulerEcartSc = (c, id, exercice) => { const x = M.sousCompteurs(c).find((y) => y.id === id); if (x && x.releves[exercice]) delete x.releves[exercice].ecart_valide; };
   M.sousCompteurs = (c) => (c && c.sous_compteurs) || [];
   const champsSousCompteur = ["type", "nom", "emplacement", "pdl", "depart", "arrivee"];
   const pdlParRae = (c) => new Map(M.pdlCopro(c).pdl.map((p) => [p.rae, p]));
@@ -622,6 +643,13 @@
     try { verifierSousCompteur(x); } catch (e) { Object.assign(x, avant); throw e; }
     return x;
   };
+  /** Déplace un sous-compteur d'un rang (sens : -1 vers le haut, +1 vers le bas) : ordre d'affichage, des écritures et du PDF. */
+  M.deplacerSousCompteur = (c, id, sens) => {
+    const l = M.sousCompteurs(c), i = l.findIndex((y) => y.id === id), j = i + sens;
+    if (i < 0 || j < 0 || j >= l.length) return false;
+    [l[i], l[j]] = [l[j], l[i]];
+    return true;
+  };
   M.supprimerSousCompteur = (c, id) => {
     c.sous_compteurs = M.sousCompteurs(c).filter((y) => y.id !== id);
     if (!c.sous_compteurs.length && S.db.todos && S.db.todos[c.numero]) S.db.todos[c.numero] = S.db.todos[c.numero].filter((t) => t.process !== "sous_compteurs");
@@ -646,11 +674,11 @@
     const a = x.releves[ex[0]], b = x.releves[ex[1]];
     return a.ancien_final !== undefined ? a.ancien_final - b.index + a.index : a.index - b.index;
   };
-  /** Relevé confié à une autre personne : sous-compteurs d'une copro (sans relevé pour la clôture visée d'abord), placés dans un lien.
+  /** Relevé confié à une autre personne : sous-compteurs d'une copro dans l'ordre choisi dans K-BDD, placés dans un lien.
       Aucune donnée n'est stockée en ligne : tout tient dans le lien (après « # », jamais envoyé au serveur). */
   M.releveExterne = (c, retour = "") => {
     const { exo } = M.exercicePourReleve(c, U.aujourdhui());
-    const sc = M.sousCompteurs(c).slice().sort((a, b) => !!(a.releves || {})[exo.libelle] - !!(b.releves || {})[exo.libelle]);
+    const sc = M.sousCompteurs(c); // ordre choisi dans K-BDD (flèches ▲ ▼), les compteurs déjà relevés restent à leur place
     return { v: 1, copro: c.numero, nom: c.nom || "", adresse: [c.adresse, c.code_postal, c.ville].filter(Boolean).join(" "), exercice: exo.libelle, cloture: exo.fin,
       retour, cree_le: U.aujourdhui(), sc: sc.map((x) => { const d = M.dernierReleve(x);
         return { id: x.id, nom: x.nom, emplacement: x.emplacement || "", type: M.typeSc(x), dernier: d ? { index: d.index, date: d.date || "", exercice: d.exercice } : null,
@@ -717,13 +745,17 @@
     if (!r) return { ...res, statut: "a_relever" };
     if (!p) return { ...res, statut: "index_initial" };
     res.conso = U.arrondi(r.ancien_final !== undefined ? r.ancien_final - p.index + r.index : r.index - p.index, 2);
-    if (res.conso < 0) return { ...res, statut: "index_incoherent" };
+    if (res.conso < 0) { // index accepté à la main (correction passée par le comptable) : pas d'écriture calculée, compte comme contrôlé
+      const v = r.index_accepte;
+      return v && v.signature === M.signatureIndexSc(r, p) ? { ...res, conso: null, statut: "index_accepte", index_accepte: v } : { ...res, statut: "index_incoherent" };
+    }
     if (M.typeSc(x) === "eau") {
       const f = M.facturesEau(c, exo.libelle); // coût moyen : factures d'eau de l'exercice saisies pour la copro
       res.eau = f;
       if (!f || !f.ttc || !f.m3) return { ...res, statut: "sans_eau" };
       res.prix = f.ttc / f.m3;
       res.montant = U.arrondi(res.conso * res.prix, 2);
+      partTva(res, f.tva !== null && f.tva !== undefined ? f.tva / f.ttc : null);
       return { ...res, statut: "calcule" };
     }
     const comptes = x.pdl ? comptesDuPdl(c, x.pdl) : [];
@@ -732,7 +764,39 @@
     if (!edf || !edf.kwh || !edf.ttc) return { ...res, statut: "sans_edf" };
     res.prix = edf.ttc / edf.kwh;
     res.montant = U.arrondi(res.conso * res.prix, 2);
+    partTva(res, edf.ht !== null && edf.ht !== undefined ? (edf.ttc - edf.ht) / edf.ttc : null);
     return { ...res, statut: "calcule" };
+  };
+  /** Début de libellé d'une écriture de sous-compteur saisi à la main (clé « sc:<id> » ou « grp:<départ>→<arrivée> ») ; l'exercice y est stocké
+      sous la forme {exercice} pour suivre les années suivantes. Renvoie le texte pour l'exercice donné, ou "" (libellé par défaut). */
+  M.libelleEcritureSc = (c, cle, exercice) => {
+    const v = ((c && c.libelles_sc) || {})[cle];
+    return v ? v.split("{exercice}").join(exercice) : "";
+  };
+  M.definirLibelleEcritureSc = (c, cle, texte, exercice) => {
+    c.libelles_sc = c.libelles_sc || {};
+    const v = String(texte || "").replace(/\s+/g, " ").trim();
+    if (!v) { delete c.libelles_sc[cle]; return; }
+    c.libelles_sc[cle] = exercice ? v.split(exercice).join("{exercice}") : v;
+  };
+  /** TVA comprise dans le montant refacturé, au prorata de la TVA des factures de l'exercice (part = TVA ÷ TTC) : res.tva, res.ht, res.taux_tva (TVA ÷ HT, %). */
+  const partTva = (res, part) => {
+    if (part === null || part === undefined || !isFinite(part) || res.montant === null) { res.tva = null; res.ht = null; res.taux_tva = null; return; }
+    res.tva = U.arrondi(res.montant * part, 2); res.ht = U.arrondi(res.montant - res.tva, 2);
+    res.taux_tva = part < 1 ? U.arrondi((part / (1 - part)) * 100, 2) : null;
+  };
+  /** Écritures de sous-compteurs regroupées par couple (compte de départ, compte d'arrivée) : [{x: {depart, arrivee, nom}, membres, montant, statut}].
+      Statut du groupe : le statut commun, sinon « ecart » si l'une est en écart, sinon « a_passer ». */
+  M.regrouperEcrituresSc = (lignes) => {
+    const g = new Map();
+    for (const l of lignes) { const k = `${l.x.depart}→${l.x.arrivee}`; if (!g.has(k)) g.set(k, []); g.get(k).push(l); }
+    return [...g.values()].map((m) => {
+      const st = new Set(m.map((l) => l.statut));
+      const tvaConnue = m.every((l) => l.tva !== null && l.tva !== undefined);
+      return { x: { depart: m[0].x.depart, arrivee: m[0].x.arrivee, nom: m.map((l) => l.x.nom).join(", ") }, membres: m, montant: U.arrondi(m.reduce((s, l) => s + l.montant, 0), 2),
+        tva: tvaConnue ? U.arrondi(m.reduce((s, l) => s + l.tva, 0), 2) : null, ht: tvaConnue ? U.arrondi(m.reduce((s, l) => s + l.ht, 0), 2) : null,
+        statut: st.size === 1 ? m[0].statut : st.has("ecart") ? "ecart" : [...st].every((s) => s === "passee" || s === "ecart_valide") ? "ecart_valide" : "a_passer" };
+    });
   };
   /** Contrôle des écritures d'un exercice d'après l'extraction des charges, sans dépendre du moment de l'extraction :
       montant initial d'un compte = factures EDF des PDL imputés sur ce compte (compta ≈ EDF) ; après écritures = initial − sorties + entrées.
@@ -765,9 +829,11 @@
       const d = etat(l.x.depart), a = etat(l.x.arrivee);
       const tol = Math.max(2, Math.abs(d.avant) * 0.005), pres = (e, v) => Math.abs(e.reel - v) <= tol;
       const statut = pres(d, d.apres) && pres(a, a.apres) ? "passee" : pres(d, d.avant) && pres(a, a.avant) ? "a_passer" : "ecart";
-      return { ...l, statut, depart: d, arrivee: a, passe_estime: U.arrondi(a.reel - a.avant, 2) /* reçu par le poste d'arrivée (le départ peut être commun à plusieurs sous-compteurs) */ };
+      const res = { ...l, statut, depart: d, arrivee: a, passe_estime: U.arrondi(a.reel - a.avant, 2) /* reçu par le poste d'arrivée (le départ peut être commun à plusieurs sous-compteurs) */ };
+      const v = statut === "ecart" && (l.x.releves[exo.libelle] || {}).ecart_valide;
+      return v && v.signature === M.signatureEcartSc(res) ? { ...res, statut: "ecart_valide", ecart_valide: v } : res;
     });
-    const ok = lignes.every((l) => ["passee", "index_initial", "meme_poste"].includes(l.statut));
+    const ok = lignes.every((l) => ["passee", "ecart_valide", "index_accepte", "index_initial", "meme_poste"].includes(l.statut));
     return { exercice: exo.libelle, extraction: !!b, lignes, ok };
   };
   /** Tâche « Relever les sous-compteurs » : cochée si et seulement si le contrôle des écritures de l'exercice est bon. */

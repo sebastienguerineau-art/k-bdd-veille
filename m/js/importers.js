@@ -197,6 +197,60 @@
   };
   I.importerContacts = (contenu) => { S.db.contacts = I.parseContacts(contenu); return S.db.contacts.length; };
 
+  // ------------------------------------------------------------------ fichier des copropriétaires (export « AAAA-MM-JJ_copro_<cabinet>.csv »)
+  /* ID_PERSO,Titre,Nom,Prenom,Email,Responsable,Comptable,telepaiement,prelevement,"num copro","nom copro" : une ligne par copropriétaire et copro. */
+  /** CSV avec guillemets (séparateur virgule ou point-virgule, détecté sur l'en-tête). */
+  I.lireCsvGuillemets = (texte) => {
+    const sep = (texte.split(/\r?\n/)[0].match(/;/g) || []).length > (texte.split(/\r?\n/)[0].match(/,/g) || []).length ? ";" : ",";
+    const lignes = [];
+    let ligne = [], champ = "", guill = false;
+    for (let i = 0; i < texte.length; i++) {
+      const ch = texte[i];
+      if (guill) {
+        if (ch === '"' && texte[i + 1] === '"') { champ += '"'; i++; } else if (ch === '"') guill = false; else champ += ch;
+      } else if (ch === '"') guill = true;
+      else if (ch === sep) { ligne.push(champ); champ = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && texte[i + 1] === "\n") i++;
+        ligne.push(champ); champ = "";
+        if (ligne.some((x) => x !== "")) lignes.push(ligne);
+        ligne = [];
+      } else champ += ch;
+    }
+    ligne.push(champ);
+    if (ligne.some((x) => x !== "")) lignes.push(ligne);
+    return lignes;
+  };
+  const enteteCopros = (texte) => U.normaliser(texte.split(/\r?\n/)[0] || "");
+  I.estFichierCoproprietaires = (contenu) => {
+    const e = enteteCopros(U.lireTexte(new Uint8Array(contenu).slice(0, 400)));
+    return e.startsWith("ID_PERSO") && e.includes("NUM COPRO");
+  };
+  const ouiNon = (v) => /^(O|OUI|1|Y|YES)$/i.test(String(v || "").trim());
+  I.parseFichierCoproprietaires = (contenu) => {
+    const lignes = I.lireCsvGuillemets(U.lireTexte(contenu));
+    const ent = (lignes[0] || []).map((x) => U.normaliser(x).replace(/[^A-Z0-9]/g, ""));
+    const col = (...noms) => ent.findIndex((x) => noms.includes(x));
+    const c = { id: col("IDPERSO"), titre: col("TITRE"), nom: col("NOM"), prenom: col("PRENOM"), email: col("EMAIL"), responsable: col("RESPONSABLE"),
+      comptable: col("COMPTABLE"), tele: col("TELEPAIEMENT"), prel: col("PRELEVEMENT"), copro: col("NUMCOPRO"), nomCopro: col("NOMCOPRO") };
+    if (c.id < 0 || c.copro < 0 || c.nom < 0) throw new Error("Fichier des copropriétaires non reconnu : colonnes ID_PERSO, Nom et num copro attendues.");
+    const v = (l, i) => (i < 0 ? "" : U.compacter(l[i] || ""));
+    return lignes.slice(1).map((l) => ({
+      id: v(l, c.id), titre: v(l, c.titre), nom: v(l, c.nom), prenom: v(l, c.prenom),
+      emails: v(l, c.email).split(/[;,\s]+/).map((x) => x.trim().toLowerCase()).filter((x) => x.includes("@")),
+      responsable: v(l, c.responsable), comptable: v(l, c.comptable), telepaiement: ouiNon(v(l, c.tele)), prelevement: ouiNon(v(l, c.prel)),
+      copro: U.numeroCopro(v(l, c.copro)) || v(l, c.copro), nom_copro: v(l, c.nomCopro),
+    })).filter((x) => x.id && x.copro);
+  };
+  /** Remplace le fichier des copropriétaires (export complet). Renvoie {lignes, copros, inconnues}. */
+  I.importerFichierCoproprietaires = (nom, contenu, le = U.aujourdhui()) => {
+    const liste = I.parseFichierCoproprietaires(contenu);
+    const m = String(nom).match(/(\d{4}-\d{2}-\d{2})/);
+    S.db.coproprietaires = { maj: m ? m[1] : le, importe_le: le, fichier: String(nom).split(/[\\/]/).pop(), liste };
+    const copros = [...new Set(liste.map((x) => x.copro))];
+    return { lignes: liste.length, copros: copros.length, inconnues: copros.filter((n) => !S.copro(n)) };
+  };
+
   // ======================================================================== EDF (DÉCRET TERTIAIRE)
   const lireFeuille = (contenu) => {
     const wb = globalThis.XLSX.read(contenu, { type: "array", cellDates: false });
@@ -431,6 +485,7 @@
     balance: "Balance comptable (ex. 9226.csv, ou édition globale)",
     liste_copros: "Liste des copros ICS (LISTE COPROS.csv)",
     contacts: "Extraction copropriétaires",
+    fichier_coproprietaires: "Fichier des copropriétaires (AAAA-MM-JJ_copro_….csv)",
     portefeuille_comptable: "Portefeuille comptables (COMPTABLES.csv)",
     portefeuille_gestionnaire: "Portefeuille gestionnaires (GESTIONNAIRES.csv)",
     edf: "Consommations EDF (EDF 2025.xlsx)",
@@ -454,6 +509,7 @@
     if (n.includes("COMPTABLES")) return "portefeuille_comptable";
     if (n.includes("GESTIONNAIRES")) return "portefeuille_gestionnaire";
     if (n.includes("EXTRACTION")) return "contacts";
+    if (n.endsWith(".CSV") && I.estFichierCoproprietaires(contenu)) return "fichier_coproprietaires";
     if (I.parseNomRelance && I.parseNomRelance(nom)) return "relance";
     if (I.estContratsIcs && I.estContratsIcs(contenu)) return "contrats_ics";
     if (I.estFacturesEdf && I.estFacturesEdf(contenu)) return "factures_edf";
@@ -473,6 +529,7 @@
       case "catalogue": return `${I.importerCatalogue(nom, contenu)} copropriétaire(s)`;
       case "liste_copros": return `${I.importerListeCopros(contenu)} copro(s) ajoutée(s)`;
       case "contacts": return `${I.importerContacts(contenu)} fiche(s)`;
+      case "fichier_coproprietaires": { const r = I.importerFichierCoproprietaires(nom, contenu); return `${r.lignes} copropriétaire(s) sur ${r.copros} copro(s)${r.inconnues.length ? ` (${r.inconnues.length} copro(s) absente(s) de K-BDD : ${r.inconnues.slice(0, 8).join(", ")}${r.inconnues.length > 8 ? "…" : ""})` : ""}`; }
       case "portefeuille_comptable": return `${I.importerPortefeuille("comptable", contenu, true)} affectation(s)`;
       case "portefeuille_gestionnaire": return `${I.importerPortefeuille("gestionnaire", contenu, true)} affectation(s)`;
       case "edf": return `${I.importerEdf(nom, contenu)} point(s) de livraison`;
@@ -538,6 +595,16 @@
       const n = I.importerContacts(await lire(ext));
       S.journal("Extraction copropriétaires", ext.name, `${n} fiche(s)`);
       rapport.push(`Extraction copropriétaires : ${n} fiche(s)`);
+    }
+    // fichier des copropriétaires : le plus récent de RESSOURCES (« AAAA-MM-JJ_copro_….csv »), relu s'il a changé
+    const fc = (await S.fichiers(ressources, (x) => /^\d{4}-\d{2}-\d{2}_copro.*\.csv$/i.test(x))).pop();
+    if (fc && !(S.db.coproprietaires && S.db.coproprietaires.fichier === fc.name)) {
+      const contenu = await lire(fc);
+      if (I.estFichierCoproprietaires(contenu)) {
+        const r = I.importerFichierCoproprietaires(fc.name, contenu);
+        S.journal("Fichier copropriétaires", fc.name, `${r.lignes} copropriétaire(s), ${r.copros} copro(s)`);
+        rapport.push(`Fichier des copropriétaires : ${r.lignes} copropriétaire(s) sur ${r.copros} copro(s)`);
+      }
     }
     d = await S.sousDossier(ressources, "CONSOS EDF");
     if (d) for (const f of await S.fichiers(d, (x) => /\.(csv|zip)$/i.test(x))) { // export des factures EDF (source principale), CSV ou .zip d'EDF

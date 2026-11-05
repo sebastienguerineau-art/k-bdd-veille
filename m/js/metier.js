@@ -125,8 +125,9 @@
     const deja = nom.match(/^(\d{4}) CIC (\d{2}) (\d{4})( FT)?(\.\w+)?$/); // déjà codifié (resté à la racine) : seulement à ranger
     if (deja) return { copro: deja[1], mois: deja[2], annee: deja[3], ft: !!deja[4], compte: "", ext, nouveau: nom, deja: true };
     const numeros = new Set(Object.keys(S.db.copros));
-    const d = nom.match(/(\d{4})-(\d{2})-\d{2}/) || nom.match(/(?<!\d)(\d{2})[ ._-](20\d{2})(?!\d)/);
+    const d = nom.match(/(\d{4})-(\d{2})-(\d{2})/) || nom.match(/(?<!\d)(\d{2})[ ._-](20\d{2})(?!\d)/);
     const [annee, mois] = !d ? ["", ""] : d[1].length === 4 ? [d[1], d[2]] : [d[2], d[1]];
+    const date = d && d[1].length === 4 ? `${d[1]}-${d[2]}-${d[3]}` : ""; // date d'arrêté du relevé (« au 2026-11-02 »)
     const m = nom.match(/Compte\s+(\d{5})\s+(\d{9,11})\s+(\d{2})\s+(.*?)\s+au\s+\d{4}-\d{2}-\d{2}/i);
     let copro = null, ft = false, compte = "";
     if (m) {
@@ -139,7 +140,38 @@
     } else copro = U.extraireNumeroCopro(nom, numeros);
     const memo = compte && (S.db.extraits_cic || {})[compte];
     if (memo) { copro = memo.copro || copro; ft = !!memo.ft; }
-    return { copro, mois, annee, ft, compte, ext, nouveau: copro && mois && annee ? M.nomCodifieCic(copro, mois, annee, ft, ext) : "" };
+    return { copro, mois, annee, ft, compte, ext, date, nouveau: copro && mois && annee ? M.nomCodifieCic(copro, mois, annee, ft, ext) : "" };
+  };
+  /** Période d'un extrait à confirmer avant rangement ? Mois pas encore terminé ou futur, ou relevé des tout premiers jours d'un mois
+      (le 5 au plus tard) alors que l'extrait du mois précédent manque pour ce compte (relevé en retard du CIC).
+      dernier : dernier mois rangé pour ce compte (« AAAA-MM »). Renvoie null ou {raison, suggestion: {mois, annee}}. */
+  M.controlePeriodeExtrait = (mois, annee, date = "", dernier = "", aujourdhui = U.aujourdhui()) => {
+    if (!/^\d{2}$/.test(mois || "") || !/^\d{4}$/.test(annee || "")) return null;
+    const periode = `${annee}-${mois}`, courant = aujourdhui.slice(0, 7);
+    const precedent = U.decalerJours(`${periode}-01`, -1).slice(0, 7), suggestion = { mois: precedent.slice(5), annee: precedent.slice(0, 4) };
+    if (periode > courant) return { raison: `période future (${mois}/${annee})`, suggestion };
+    if (periode === courant) return { raison: `${U.MOIS[Number(mois) - 1]} ${annee} n'est pas terminé${date ? ` (relevé du ${U.jjmmaaaa(date)})` : ""} : relevé en retard du mois précédent ?`, suggestion };
+    if (date && date.slice(0, 7) === periode && Number(date.slice(8, 10)) <= 5 && (!dernier || dernier < precedent))
+      return { raison: `relevé du ${U.jjmmaaaa(date)}, tout début de mois, et ${U.MOIS[Number(suggestion.mois) - 1]} ${suggestion.annee} manque pour ce compte : relevé en retard ?`, suggestion };
+    return null;
+  };
+  /** Dernier extrait rangé par compte d'après les noms codifiés (« 9234 CIC 08 2026[ FT].pdf ») : {"9234": "2026-08", "9234 FT": "2026-07"}. */
+  M.derniersExtraitsCic = (noms) => {
+    const res = {};
+    for (const n of noms) {
+      const m = String(n).match(/^(\d{4}) CIC (\d{2}) (\d{4})( FT)?(?:\.\w+)?$/);
+      if (!m) continue;
+      const cle = `${m[1]}${m[4] ? " FT" : ""}`, mois = `${m[3]}-${m[2]}`;
+      if (!res[cle] || res[cle] < mois) res[cle] = mois;
+    }
+    return res;
+  };
+  /** État du dernier extrait d'un compte : « ok » (mois précédent ou plus récent), « retard » (un mois de retard), « alerte » (plus), « absent ». */
+  M.etatDernierExtrait = (mois, aujourdhui = U.aujourdhui()) => {
+    if (!mois) return "absent";
+    const attendu = U.decalerJours(`${aujourdhui.slice(0, 7)}-01`, -1).slice(0, 7);
+    const ecart = (Number(attendu.slice(0, 4)) - Number(mois.slice(0, 4))) * 12 + Number(attendu.slice(5)) - Number(mois.slice(5));
+    return ecart <= 0 ? "ok" : ecart === 1 ? "retard" : "alerte";
   };
   /** Correction manuelle d'un compte (copro, fonds travaux) : resservira pour les extraits suivants du même compte. */
   M.memoriserCompteCic = (compte, copro, ft) => {
@@ -241,12 +273,68 @@
     }).sort((a, b) => b.depense - a.depense);
   };
 
+  /** Copropriétaires d'une copro d'après le fichier des copropriétaires (triés par nom). */
+  M.coproprietairesCopro = (numero) => ((S.db.coproprietaires && S.db.coproprietaires.liste) || []).filter((x) => x.copro === numero)
+    .sort((a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`));
+
+  // ------------------------------------------------------------------ portefeuilles : fiche copro ↔ fichier des copropriétaires
+  /** « Madame NOM Prénom » → {nom, prenom} (mots en capitales = nom). */
+  M.decouperPersonne = (texte) => {
+    const mots = U.compacter(texte).replace(/^(monsieur|madame|mademoiselle|mme|mlle|mr|m\.)\s+/i, "").split(" ").filter(Boolean);
+    const estNom = (m) => m === m.toUpperCase() && /[A-Z]/.test(U.sansAccents(m));
+    const nom = mots.filter(estNom), prenom = mots.filter((m) => !estNom(m));
+    return { nom: nom.join(" "), prenom: prenom.join(" ") || "" };
+  };
+  /** Personne K-BDD du rôle correspondant au texte du fichier (prénom, et nom s'il est connu), ou null. */
+  M.personneDepuisFichier = (role, texte) => {
+    const d = M.decouperPersonne(texte), np = U.normaliser(d.prenom), nn = U.normaliser(d.nom);
+    if (!np && !nn) return null;
+    const cands = S.db.personnes.filter((p) => p.role === role && (!np || U.normaliser(p.prenom) === np));
+    return cands.find((p) => p.nom && U.normaliser(p.nom) === nn) || cands.find((p) => !p.nom || !nn) || null;
+  };
+  M.ROLES_PORTEFEUILLE = { gestionnaire: "Responsable", comptable: "Comptable" };
+  /** Comparaison des gestionnaires et comptables des fiches copro avec le fichier des copropriétaires.
+      {ecarts: [{c, role, kbdd, fichier, personne, ignore}], absentes: [n° copros du fichier inconnues], hors_fichier: [copros actives absentes du fichier]} */
+  M.controlePortefeuilles = () => {
+    const fc = S.db.coproprietaires;
+    if (!fc || !fc.liste.length) return null;
+    const ign = S.db.portefeuille_ignores || {}, parCopro = {};
+    for (const x of fc.liste) (parCopro[x.copro] = parCopro[x.copro] || []).push(x);
+    const majoritaire = (l, k) => { const n = {}; for (const x of l) if (x[k]) n[x[k]] = (n[x[k]] || 0) + 1; return Object.entries(n).sort((a, b) => b[1] - a[1])[0]?.[0] || ""; };
+    const ecarts = [], absentes = [];
+    for (const [numero, l] of Object.entries(parCopro).sort()) {
+      const c = S.copro(numero);
+      if (!c) { absentes.push({ numero, nom: l[0].nom_copro, gestionnaire: majoritaire(l, "responsable"), comptable: majoritaire(l, "comptable") }); continue; }
+      for (const [role, cle] of Object.entries({ gestionnaire: "responsable", comptable: "comptable" })) {
+        const fichier = majoritaire(l, cle);
+        if (!fichier) continue;
+        const p = M.personneDepuisFichier(role, fichier);
+        if (p && p.prenom === c[role]) continue;
+        ecarts.push({ c, role, kbdd: c[role] || "", fichier, personne: p, ignore: ign[`${numero}|${role}`] === fichier });
+      }
+    }
+    const hors_fichier = S.copros().filter((c) => c.actif && !parCopro[c.numero]);
+    return { ecarts, absentes, hors_fichier, fichier: fc };
+  };
+  /** Reprend la valeur du fichier dans la fiche (personne créée au besoin). */
+  M.appliquerPortefeuilleFichier = (c, role, fichier) => {
+    let p = M.personneDepuisFichier(role, fichier);
+    if (!p) { const d = M.decouperPersonne(fichier); p = S.ajouterPersonne(role, d.prenom || d.nom, d.prenom ? d.nom : ""); }
+    c[role] = p.prenom; c.modifie_le = U.horodatage();
+    return p.prenom;
+  };
+  M.ignorerEcartPortefeuille = (numero, role, fichier) => {
+    if (!S.db.portefeuille_ignores) S.db.portefeuille_ignores = {};
+    S.db.portefeuille_ignores[`${numero}|${role}`] = fichier;
+  };
+
   // ------------------------------------------------------------------ process spécifiques d'une copro (catalogue extensible)
   /** Catalogue : chaque process ajoute un reporting à importer lors de la synthèse des comptes. */
   M.PROCESS = {
     pv_sbm: { libelle: "Panneaux Photovoltaïques : Reporting SBM", fournisseur: "SBM", todo: "Récupérer le reporting SBM",
       modes: { revente_totale: "Revente totale", autoconso_injection: "Autoconsommation + injection (surplus non rémunéré)",
         autoconso_revente: "Autoconsommation + revente du surplus", autoconso_pure: "Autoconsommation pure (sans injection)" } },
+    gtb_daikin: { libelle: "GTB : Daikin Cloud Plus", fournisseur: "Daikin", mensuel: true }, // export mensuel des consommations (onglet GTB, rappel en début de mois)
   };
   const ANCIENS_MODES_PV = { autoconso: "autoconso_injection", surplus: "autoconso_revente", vente_totale: "revente_totale" };
   /** Process d'une copro ({type, mode, pdl_conso, compte_vente…}) ou null. Reprise des réglages photovoltaïques antérieurs au catalogue. */

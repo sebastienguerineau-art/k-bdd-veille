@@ -568,6 +568,9 @@
     for (let i = 0; i < nbMois; i++) {
       const m = ajouterMois(debut, i), mm = Number(m.slice(5)), an = Number(m.slice(0, 4));
       if ([1, 4, 7, 10].includes(mm) && M.premierJourOuvre) ajouter({ date: M.premierJourOuvre(an, mm), type: "edf", titre: "Télécharger les consommations EDF", detail: "export des factures EDF → RESSOURCES\\CONSOS EDF", lien: "#/compteurs" });
+      if (M.premierOuvreDuMois) ajouter({ date: M.premierOuvreDuMois(m), type: "rappro", titre: "Télécharger le relevé mensuel CIC", detail: `relevé ${/^[ao]/.test(U.MOIS[(mm + 10) % 12]) ? "d'" : "de "}${U.MOIS[(mm + 10) % 12]} (CFONB) → contrôle et validation dans K-BDD, page Virements CIC`, lien: "#/virements" });
+      if (M.coprosGtb && M.coprosGtb().length && M.premierOuvreDuMois) ajouter({ date: M.premierOuvreDuMois(m), type: "process", titre: "Exporter la GTB Daikin Cloud Plus",
+        detail: `consommations ${/^[ao]/.test(U.MOIS[(mm + 10) % 12]) ? "d'" : "de "}${U.MOIS[(mm + 10) % 12]} (${M.coprosGtb().map((c) => c.numero).join(", ")}) → onglet GTB de la copro`, lien: `#/gtb?copro=${encodeURIComponent(M.coprosGtb()[0].numero)}` });
       ajouter({ date: `${m}-20`, type: "balance", titre: "Importer la balance générale", detail: "GENERALE.csv → RESSOURCES\\BALANCES", lien: "#/attente" });
       ajouter({ date: finMois(m), type: "rappro", titre: "Rapprochements bancaires du mois", detail: "relevés au dernier jour du mois · CONTROLE RAPPRO", lien: "#/rapprochement" });
       if (mm === Number((M.ECHEANCE_OPERAT || "09-30").slice(0, 2)) && S.copros().some((c) => c.actif && M.soumisDecret && M.soumisDecret(c)))

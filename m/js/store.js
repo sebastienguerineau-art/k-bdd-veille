@@ -34,6 +34,7 @@
       rapprochements: [],
       rappro_importe_le: "",
       incidents_cic_le: "",     // dernier import de l'export CIC « incidents de paiement » (rappel du lundi)
+      gtb: {},                  // n° copro -> consommations Daikin Cloud Plus {jours: {AAAA-MM-JJ: [kWh x 4 usages]}, mois: {AAAA-MM: {fichier, complet…}}}
       pv: {},                   // n° copro -> production photovoltaïque {centrale, capacite, mois: {AAAA-MM: {kwh, pic}}, compte_injection}
       travaux_anterieurs: {},   // « n° copro|clé|opération » -> {montant} : dépensé avant les exercices importés
       extraits_cic: {},         // n° de compte CIC -> {copro, ft} : corrections manuelles du rangement des extraits
@@ -49,6 +50,7 @@
       edf_conso: {},          // annee -> [lignes]
       catalogue: {},          // copro -> [{numero, lignes, mandataire, domiciliation}]
       contacts: [],
+      coproprietaires: null,     // fichier des copropriétaires (export « AAAA-MM-JJ_copro_<cabinet>.csv ») {maj, fichier, liste: [{id, titre, nom, prenom, emails, …, copro}]}
       factures: [],           // historique complet des factures (éléments + instantané pour ressortir le PDF à l'identique)
       prochaine_facture: 1,
       operat: {},
@@ -109,6 +111,10 @@
       S.dossier = (await idbGet("dossier")) || null;
       if (S.dossier) S.permission = await S.dossier.queryPermission({ mode: "readwrite" });
       S.dossierFactures = (await idbGet("dossier_factures")) || null;
+      S.dossierVirements = (await idbGet("dossier_virements")) || null;
+      S.dossierCompta = (await idbGet("dossier_compta")) || null;
+      S.dossiersCompta = (await idbGet("dossiers_compta_copros")) || {};
+      S.racineCompta = (await idbGet("racine_compta")) || null;
     } catch (e) { console.warn(e); }
     for (const [k, v] of Object.entries(LISTES_DEFAUT)) if (!S.db.listes[k]) S.db.listes[k] = v.slice();
     S.normaliser();
@@ -212,6 +218,34 @@
     return S.permission;
   };
   S.dossierPret = () => S.dossier && S.permission === "granted";
+  /** Dossier choisi à part mais situé dans BASE DE DONNÉES (ex. RESSOURCES\VIREMENTS CIC) : retrouvé depuis la base, il profite de son
+      autorisation (pas de seconde demande). Renvoie le dossier atteint depuis BASE DE DONNÉES, ou null s'il est ailleurs. */
+  S.deriverDepuisBase = async (h) => {
+    if (!h || !S.dossierPret()) return null;
+    try {
+      const chemin = await S.dossier.resolve(h);
+      if (!chemin) return null;
+      let d = S.dossier;
+      for (const n of chemin) d = await d.getDirectoryHandle(n);
+      return d;
+    } catch (e) { return null; }
+  };
+  /** Accès à un dossier annexe : déjà accordé, hérité de BASE DE DONNÉES, ou demandé (demander : dans un clic). Renvoie le dossier utilisable ou null. */
+  S.accesAnnexe = async (h, demander = false) => {
+    if (!h) return null;
+    try { if ((await h.queryPermission({ mode: "readwrite" })) === "granted") return h; } catch (e) { /* poignée invalide */ }
+    const d = await S.deriverDepuisBase(h);
+    if (d) return d;
+    if (!demander) return null;
+    try { return (await h.requestPermission({ mode: "readwrite" })) === "granted" ? h : null; } catch (e) { return null; }
+  };
+  /** Après l'autorisation de BASE DE DONNÉES (même clic) : dossiers des virements et des factures manuelles autorisés aussi
+      (hérités de la base s'ils y sont, sinon demandés à la suite). */
+  S.autoriserAnnexes = async () => {
+    const v = await S.accesAnnexe(S.dossierVirements, true); if (v) S.dossierVirements = v;
+    const f = await S.accesAnnexe(S.dossierFactures, true); if (f) S.dossierFactures = f;
+    const rc = await S.accesAnnexe(S.racineCompta, true); if (rc) S.racineCompta = rc;
+  };
 
   /** Dossier des factures manuelles (facultatif, ex. X:\...\FACTURES MANUELLES). */
   S.dossierFactures = null;
@@ -221,10 +255,97 @@
   };
   /** À appeler au début d'un clic (le navigateur exige une action de l'utilisateur pour autoriser). */
   S.autoriserFactures = async () => {
-    if (!S.dossierFactures) return false;
-    if ((await S.dossierFactures.queryPermission({ mode: "readwrite" })) === "granted") return true;
-    return (await S.dossierFactures.requestPermission({ mode: "readwrite" })) === "granted";
+    const d = await S.accesAnnexe(S.dossierFactures, true);
+    if (d) S.dossierFactures = d;
+    return !!d;
   };
+
+  /** Dossier de travail des virements CIC (celui qui contient A VALIDER, VALIDES, ARCHIVES, ECARTES, JOURNAL) ; écriture pour valider ou écarter. */
+  S.dossierVirements = null;
+  S.SOUS_DOSSIERS_VIREMENTS = ["A VALIDER", "VALIDES", "ARCHIVES", "ECARTES", "JOURNAL"];
+  /** Refuse un sous-dossier ou un dossier sans aucun des sous-dossiers créés par l'installation (dossier du logiciel, par exemple). */
+  S.verifierDossierVirements = async (d) => {
+    const nom = String(d.name || "").toUpperCase();
+    if (S.SOUS_DOSSIERS_VIREMENTS.includes(nom)) throw new Error(`« ${d.name} » est un sous-dossier : choisissez le dossier qui le contient (le dossier de travail).`);
+    for (const s of S.SOUS_DOSSIERS_VIREMENTS) { try { await d.getDirectoryHandle(s); return; } catch (e) { /* absent */ } }
+    throw new Error(`« ${d.name} » ne contient ni A VALIDER ni JOURNAL : ce n'est pas le dossier de travail choisi à l'installation du rangement (ni le dossier du logiciel).`);
+  };
+  S.choisirDossierVirements = async () => {
+    const d = await globalThis.showDirectoryPicker({ id: "kbdd-virements", mode: "readwrite" });
+    await S.verifierDossierVirements(d);
+    S.dossierVirements = d;
+    await idbSet("dossier_virements", S.dossierVirements);
+  };
+  /** Dossier des virements oublié par le navigateur (mémoire effacée, autre profil…) : retrouvé dans BASE DE DONNÉES\RESSOURCES\VIREMENTS CIC
+      s'il contient les sous-dossiers du rangement, et mémorisé à nouveau. Renvoie true si un dossier des virements est connu. */
+  S.dossierVirementsDispo = async () => {
+    if (S.dossierVirements) return true;
+    if (!S.dossierPret()) return false;
+    try {
+      const d = await S.sousDossier(S.dossier, "RESSOURCES", "VIREMENTS CIC");
+      if (!d) return false;
+      await S.verifierDossierVirements(d);
+      S.dossierVirements = d;
+      await idbSet("dossier_virements", d);
+      return true;
+    } catch (e) { return false; }
+  };
+  S.virementsAutorises = async () => { const d = await S.accesAnnexe(S.dossierVirements); if (d) S.dossierVirements = d; return !!d; };
+  S.autoriserVirements = async () => { const d = await S.accesAnnexe(S.dossierVirements, true); if (d) S.dossierVirements = d; return !!d; };
+
+  /** Dossier d'import des factures du logiciel de comptabilité (ex. U:\mails) : les PDF reçus par mail y sont envoyés depuis la page Règles factures. */
+  S.dossierCompta = null;
+  S.choisirDossierCompta = async () => {
+    const d = await globalThis.showDirectoryPicker({ id: "kbdd-compta", mode: "readwrite" });
+    if (S.dossier && (await S.dossier.isSameEntry(d) || (await S.dossier.resolve(d)))) throw new Error(`« ${d.name} » est dans BASE DE DONNÉES : choisissez le dossier lu par le logiciel de comptabilité (U:\\mails).`);
+    S.dossierCompta = d;
+    await idbSet("dossier_compta", d);
+  };
+  /** Dossier compta de chaque copro et exercice (le chemin change chaque année ; PDF de synthèse enregistrés dedans), choisi par la fenêtre Windows
+      de choix de dossier : {"n° copro|exercice": dossier}. La fenêtre s'ouvre sur le dossier d'un exercice précédent de la copro.
+      Dossier racine facultatif (contient tous les dossiers compta) : une seule autorisation au lancement au lieu d'une par copro. */
+  S.dossiersCompta = {};
+  S.racineCompta = null;
+  S.choisirDossierComptaCopro = async (cle) => {
+    const copro = cle.split("|")[0], precedent = Object.keys(S.dossiersCompta).filter((k) => k.split("|")[0] === copro && k !== cle).sort().pop();
+    const depart = S.dossiersCompta[cle] || (precedent && S.dossiersCompta[precedent]) || S.racineCompta;
+    const d = await globalThis.showDirectoryPicker({ id: "kbdd-compta-copros", mode: "readwrite", ...(depart ? { startIn: depart } : {}) });
+    S.dossiersCompta = { ...S.dossiersCompta, [cle]: d };
+    await idbSet("dossiers_compta_copros", S.dossiersCompta);
+    return d;
+  };
+  S.choisirRacineCompta = async () => {
+    S.racineCompta = await globalThis.showDirectoryPicker({ id: "kbdd-compta-racine", mode: "readwrite" });
+    await idbSet("racine_compta", S.racineCompta);
+  };
+  /** Chemin Windows du dossier compta (lien du bouton du PDF de synthèse). Chrome ne donne pas le chemin d'un dossier choisi : il est
+      reconstitué depuis le chemin du dossier racine saisi dans Paramètres et la position du dossier dans ce dossier racine. null sinon. */
+  S.cheminDossierCompta = async (cle) => {
+    const h = S.dossiersCompta[cle], base = String(S.param("chemin_racine_compta") || "").trim().replace(/[\\/]+$/, "");
+    if (!h || !base || !S.racineCompta) return null;
+    try {
+      const chemin = await S.racineCompta.resolve(h);
+      return chemin ? [base, ...chemin].join("\\") : null;
+    } catch (e) { return null; }
+  };
+  /** Dossier compta d'une copro utilisable : autorisé, hérité du dossier racine, ou demandé (demander : dans un clic). */
+  S.accesDossierCompta = async (cle, demander = false) => {
+    const h = S.dossiersCompta[cle];
+    if (!h) return null;
+    try { if ((await h.queryPermission({ mode: "readwrite" })) === "granted") return h; } catch (e) { /* poignée invalide */ }
+    if (S.racineCompta) {
+      try {
+        if ((await S.racineCompta.queryPermission({ mode: "readwrite" })) === "granted") {
+          const chemin = await S.racineCompta.resolve(h);
+          if (chemin) { let d = S.racineCompta; for (const n of chemin) d = await d.getDirectoryHandle(n); return d; }
+        }
+      } catch (e) { /* hors du dossier racine */ }
+    }
+    if (!demander) return null;
+    try { return (await h.requestPermission({ mode: "readwrite" })) === "granted" ? h : null; } catch (e) { return null; }
+  };
+  S.comptaAutorise = async () => !!S.dossierCompta && (await S.dossierCompta.queryPermission({ mode: "readwrite" })) === "granted";
+  S.autoriserCompta = async () => !!S.dossierCompta && ((await S.comptaAutorise()) || (await S.dossierCompta.requestPermission({ mode: "readwrite" })) === "granted");
 
   /** Retrouve un sous-dossier en ignorant accents / casse / encodage zip (#U00c9). */
   S.sousDossier = async (base, ...noms) => {
