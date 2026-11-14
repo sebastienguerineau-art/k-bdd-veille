@@ -1,5 +1,5 @@
 /* K-BDD mobile : fonctionnement hors connexion (réseau d'abord, copie en cache sinon). Ne met jamais la base en cache : elle est dans le navigateur. */
-const CACHE = "kbdd-mobile-v2";
+const CACHE = "kbdd-mobile-v3";
 self.addEventListener("install", (e) => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", (e) => {
