@@ -132,6 +132,35 @@
       ...inc.map((i) => ({ d: i.date, t: `${i.type || "Incident"} · ${i.contrepartie || "N/A"}`, m: i.montant, s: i.statut }))]
       .map((x) => `<li><span class="m-date">${U.jjmmaaaa(x.d).slice(0, 5)}</span><span class="m-txt"><b>${h(x.t)}</b><small>${h(x.s)}</small></span><b>${U.euro(x.m)}</b></li>`).join("")}</ul>` : "";
     // copropriétaires
+    // énergie : points de livraison EDF (clé, consommations des deux dernières années, puissance) et sous-compteurs (dernier relevé, conso, contrôle compta)
+    const energie = (() => {
+      let pdl = [];
+      try { pdl = M.pdlCopro ? M.pdlCopro(c).pdl : []; } catch (e) { pdl = []; }
+      const sc = (c.sous_compteurs || []);
+      if (!pdl.length && !sc.length) return "";
+      const kwh = (v) => (v === null || v === undefined ? "—" : `${U.nombre(v, 0)} kWh`);
+      const blocPdl = pdl.map((p) => {
+        const ans = Object.keys(p.annees || {}).sort().slice(-2).reverse();
+        const ct = M.contratPdl ? M.contratPdl(p.rae) : null;
+        const puissance = ct && ct.ps ? `${U.nombre(ct.ps, 0)} kVA${ct.pm ? ` · max ${U.nombre(ct.pm, 0)} kVA (${U.nombre(ct.taux * 100, 0)} %)` : ""}` : "";
+        return `<li><span class="m-txt"><b>${h(p.site || "Point de livraison")}</b><small>PDL ${h(p.rae)} · clé ${h(p.cle || "à choisir")}</small>
+          ${ans.map((a) => `<small>${a} : ${kwh(p.annees[a].kwh)} · ${U.euro(p.annees[a].ttc)}</small>`).join("")}${puissance ? `<small>Puissance : ${puissance}</small>` : ""}</span></li>`;
+      }).join("");
+      let ctl = null;
+      try { ctl = sc.length && M.controleSousCompteurs ? M.controleSousCompteurs(c, K.E.exerciceClos(c.exercice || "01/01 au 31/12")) : null; } catch (e) { ctl = null; }
+      const blocSc = sc.map((x) => {
+        const d = M.dernierReleve(x), l = ctl && ctl.lignes.find((y) => y.x.id === x.id), [niv, lib] = l ? M.STATUTS_SC_DECRET[l.statut] || ["neutre", l.statut] : ["neutre", ""];
+        const unite = M.uniteSc ? M.uniteSc(x) : "kWh";
+        return `<li><span class="m-txt"><b>${h(x.nom)}</b><small>${h([M.typeSc(x) === "eau" ? "eau" : "électricité", x.emplacement].filter(Boolean).join(" · "))}</small>
+          <small>${d ? `dernier relevé : ${U.nombre(d.index, 0)} le ${U.jjmmaaaa(d.date) || "?"} (exercice ${h(d.exercice)})` : "jamais relevé"}</small>
+          ${l && l.conso !== null && l.conso !== undefined ? `<small>conso ${h(ctl.exercice)} : ${U.nombre(l.conso, 0)} ${h(unite)}${l.montant ? ` · ${U.euro(l.montant)}` : ""}</small>` : ""}
+          ${lib ? `<small class="m-sc-statut">${pastille(niv === "ok" ? "ok" : niv === "alerte" ? "alerte" : niv === "retard" ? "retard" : "neutre", h(lib))}</small>` : ""}</span></li>`;
+      }).join("");
+      return `${pdl.length ? `<p class="m-muted">Points de livraison EDF (${pdl.length})</p><ul class="m-liste compacte">${blocPdl}</ul>` : ""}
+        ${sc.length ? `<p class="m-muted">Sous-compteurs (${sc.length})${ctl ? ` · contrôle avec la compta ${h(ctl.exercice)}` : ""}</p><ul class="m-liste compacte">${blocSc}</ul>
+          <a class="m-bouton" href="#/releves">Relever les sous-compteurs →</a>` : ""}`;
+    })();
+    const nbEnergie = ((M.pdlCopro ? (() => { try { return M.pdlCopro(c).pdl.length; } catch (e) { return 0; } })() : 0) + (c.sous_compteurs || []).length);
     const contacts = S.db.contacts.filter((x) => x.copro === c.numero);
     const copros = contacts.length ? `<input type="search" class="m-cherche petit" id="m-cherche-cp" placeholder="Chercher un copropriétaire…">
       <ul class="m-liste compacte" id="m-cp">${contacts.map((x) => `<li data-texte="${h(U.normaliser(`${x.nom} ${x.code}`))}"><span class="m-txt"><b>${h(x.nom)}</b><small>${tel(h(x.coordonnees))}</small></span></li>`).join("")}</ul>` : "";
@@ -148,6 +177,7 @@
       ${section("Mandat de syndic", mandat, ctl.a_renouveler || ctl.expire)}
       ${section("Registre des copropriétés", registre, k && k.statut === "alerte", k && k.statut === "alerte" ? ' <span class="m-n alerte">!</span>' : "")}
       ${section("Banque", banque, st !== "ok")}
+      ${section("Énergie", energie, false, nbEnergie ? ` <span class="m-n">${nbEnergie}</span>` : "")}
       ${section("Impayés CIC", impayes, false, imp.length + inc.length ? ` <span class="m-n alerte">${imp.length + inc.length}</span>` : "")}
       ${section(`Copropriétaires (${contacts.length})`, copros)}`;
   };

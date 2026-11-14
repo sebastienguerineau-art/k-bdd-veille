@@ -173,6 +173,89 @@
     }
     return res;
   };
+  // ------------------------------------------------------------------ feuille de présence (RESSOURCES\FEUILLES DE PRESENCE\<n° copro>.csv)
+  /* No;Nom et Adresse;Type;Lot;Bt;01;02;04;…;;Representant;Signature : un copropriétaire (n° de compte) puis ses lignes d'adresse, une ligne par lot
+     avec ses tantièmes dans chaque clé (colonne « 01 » = clé 0100 des extractions de charges), « Total -> » par copropriétaire, « Total General ». */
+  I.estFeuillePresence = (contenu) => /^No;Nom et Adresse;Type;Lot;/i.test(U.lireTexte(new Uint8Array(contenu).slice(0, 200)).replace(/^\uFEFF/, ""));
+  I.parseFeuillePresence = (contenu) => {
+    const lignes = U.lireCsv(contenu);
+    const ent = lignes[0] || [];
+    const cols = ent.map((x, i) => [i, String(x).trim()]).filter(([, x]) => /^\d{2}$/.test(x)).map(([i, x]) => [i, `${x}00`]);
+    if (!cols.length || !/^Lot$/i.test(String(ent[3] || "").trim())) throw new Error("Feuille de présence non reconnue : colonnes No ; Nom et Adresse ; Type ; Lot ; Bt ; 01 ; 02… attendues.");
+    const nb = (x) => { const v = U.nombreFr(String(x || "").replace(/\s/g, "")); return Number.isFinite(v) ? v : 0; };
+    const res = { codes: cols.map(([, c]) => c), totaux: {}, coproprietaires: [] };
+    let cp = null;
+    for (const l of lignes.slice(1)) {
+      const no = String(l[0] || "").trim(), lib = String(l[1] || "").trim(), lot = String(l[3] || "").trim();
+      if (/^Total General/i.test(lib)) { for (const [i, c] of cols) res.totaux[c] = nb(l[i]); cp = null; continue; }
+      if (/^Total\s*->/i.test(lib)) { cp = null; continue; }
+      if (/^\d{1,6}$/.test(no)) { cp = { numero: no.padStart(4, "0"), nom: lib, adresse: [], lots: [] }; res.coproprietaires.push(cp); }
+      else if (cp && lib) cp.adresse.push(lib);
+      if (cp && lot) cp.lots.push({ lot, type: String(l[2] || "").trim(), bt: String(l[4] || "").trim(), t: Object.fromEntries(cols.map(([i, c]) => [c, nb(l[i])])) });
+    }
+    // total général absent : somme des lots
+    for (const c of res.codes) if (!res.totaux[c]) res.totaux[c] = res.coproprietaires.reduce((t, x) => t + x.lots.reduce((s, y) => s + (y.t[c] || 0), 0), 0);
+    return res;
+  };
+  /** Importe la feuille de présence d'une copro (n° dans le nom du fichier). Renvoie {copro, coproprietaires, lots, codes, ecarts}. */
+  I.importerFeuillePresence = (nom, contenu, le = U.aujourdhui()) => {
+    const m = String(nom).split(/[\\/]/).pop().match(/(\d{4})/);
+    if (!m) throw new Error("N° de copro absent du nom du fichier (ex. 8002.csv).");
+    const numero = m[1], r = I.parseFeuillePresence(contenu);
+    if (!S.db.lots) S.db.lots = {};
+    S.db.lots[numero] = { fichier: String(nom).split(/[\\/]/).pop(), maj: le, ...r };
+    // contrôle : somme des lots = total général de chaque clé
+    const ecarts = r.codes.filter((c) => Math.abs(r.coproprietaires.reduce((t, x) => t + x.lots.reduce((s, y) => s + (y.t[c] || 0), 0), 0) - r.totaux[c]) > 0.5);
+    return { copro: numero, coproprietaires: r.coproprietaires.length, lots: r.coproprietaires.reduce((t, x) => t + x.lots.length, 0), codes: r.codes, ecarts };
+  };
+  // ------------------------------------------------------------------ liste des lots (RESSOURCES\LISTE LOTS\<n° copro>.csv)
+  /* No;Type;Prin;Ba;Et;Es;Porte;Noplan;;;;Coproprietaire : une ligne par lot (type en clair, bâtiment, étage, escalier, porte, n° de plan). */
+  I.estListeLots = (contenu) => /^No;Type;Prin;Ba;Et;/i.test(U.lireTexte(new Uint8Array(contenu).slice(0, 200)).replace(/^\uFEFF/, ""));
+  I.parseListeLots = (contenu) => {
+    const lignes = U.lireCsv(contenu), ent = (lignes[0] || []).map((x) => U.normaliser(x));
+    const col = (n) => ent.indexOf(n), cp = ent.findIndex((x) => x.startsWith("COPROPRIETAIRE"));
+    if (col("NO") !== 0 || col("TYPE") < 0) throw new Error("Liste des lots non reconnue : colonnes No ; Type ; Prin ; Ba ; Et ; Es ; Porte ; Noplan attendues.");
+    const v = (l, i) => (i < 0 ? "" : U.compacter(l[i] || ""));
+    const lots = {};
+    for (const l of lignes.slice(1)) {
+      const no = v(l, 0);
+      if (!/^\d{1,6}$/.test(no)) continue;
+      lots[no.padStart(4, "0")] = { type: v(l, col("TYPE")), principal: v(l, col("PRIN")), bt: v(l, col("BA")), etage: v(l, col("ET")), escalier: v(l, col("ES")),
+        porte: v(l, col("PORTE")), plan: v(l, col("NOPLAN")), coproprietaire: v(l, cp) };
+    }
+    return { lots };
+  };
+  I.importerListeLots = (nom, contenu, le = U.aujourdhui()) => {
+    const m = String(nom).split(/[\\/]/).pop().match(/(\d{4})/);
+    if (!m) throw new Error("N° de copro absent du nom du fichier (ex. 8002.csv).");
+    const r = I.parseListeLots(contenu);
+    if (!S.db.lots_liste) S.db.lots_liste = {};
+    S.db.lots_liste[m[1]] = { fichier: String(nom).split(/[\\/]/).pop(), maj: le, ...r };
+    return { copro: m[1], lots: Object.keys(r.lots).length };
+  };
+  /** Relit les feuilles de présence et les listes des lots de RESSOURCES (fichiers modifiés seulement ; numero : une seule copro). Renvoie le rapport. */
+  I.lireDocumentsLots = async (base, numero = "") => {
+    const ressources = (await S.sousDossier(base, "RESSOURCES")) || base, rapport = [];
+    const lireF = async (fh) => new Uint8Array(await (await fh.getFile()).arrayBuffer());
+    const sources = [["FEUILLES DE PRESENCE", "lots", I.estFeuillePresence, I.importerFeuillePresence, "Feuille de présence"],
+      ["LISTE LOTS", "lots_liste", I.estListeLots, I.importerListeLots, "Liste des lots"]];
+    for (const [dossier, cle, reconnaitre, importer, lib] of sources) {
+      const d = await S.sousDossier(ressources, dossier);
+      if (d) for (const f of await S.fichiers(d, (x) => /^\d{4}.*\.csv$/i.test(x) && (!numero || x.startsWith(numero)))) {
+        const fi = await f.getFile(), sig = `${f.name}|${fi.size}|${fi.lastModified}`, num = f.name.slice(0, 4);
+        if ((S.db[cle] || {})[num] && S.db[cle][num].signature === sig) continue;
+        try {
+          const contenu = await lireF(f);
+          if (!reconnaitre(contenu)) { rapport.push(`${lib} ${f.name} : format non reconnu`); continue; }
+          const r = importer(f.name, contenu, U.dateFr(new Date(fi.lastModified)));
+          S.db[cle][num].signature = sig;
+          S.journal(lib, f.name, `${r.coproprietaires !== undefined ? `${r.coproprietaires} copropriétaire(s), ` : ""}${r.lots} lot(s)`);
+          rapport.push(`${lib} ${num} : ${r.lots} lot(s)`);
+        } catch (e) { rapport.push(`${lib} ${f.name} : ${e.message}`); }
+      }
+    }
+    return rapport;
+  };
   I.importerCatalogue = (nom, contenu) => {
     const copro = U.numeroCopro(stem(nom).trim().slice(0, 4));
     if (!copro || !/^\d{4}$/.test(copro)) throw new Error(`Nom de fichier inattendu « ${nom} » (attendu : '<n° copro>.csv')`);
@@ -343,14 +426,23 @@
   I.parseCic = (contenu) => U.lireTexte(contenu).split(/\r?\n/).map(I.parseLigneCic).filter(Boolean);
 
   /** Le relevé CIC tronque le nom (≈24 caractères) : on cherche le nom ICS qui commence pareil. */
+  /* Noms normalisés de chaque copro, calculés une fois par liste de copros (un import CIC compare chaque ligne à toutes les copros). */
+  const nomsNormalises = new WeakMap();
+  const nomsCopros = (copros) => {
+    let r = nomsNormalises.get(copros);
+    if (!r) {
+      r = copros.map((c) => ({ numero: c.numero, noms: [...new Set([c.nom_ics, c.nom])].map((nom) => U.normaliser(nom)) }));
+      nomsNormalises.set(copros, r);
+    }
+    return r;
+  };
   I.trouverCoproParNom = (libelle, copros) => {
     const cible = U.normaliser(libelle);
     if (!cible) return null;
     const m = cible.match(/^(\d{4})\b/);
     if (m && copros.some((c) => c.numero === m[1])) return m[1];
     const cands = [];
-    for (const c of copros) for (const nom of new Set([c.nom_ics, c.nom])) {
-      const n = U.normaliser(nom);
+    for (const c of nomsCopros(copros)) for (const n of c.noms) {
       if (n && (n === cible || n.startsWith(cible) || cible.startsWith(n))) cands.push([Math.abs(n.length - cible.length), c.numero]);
     }
     cands.sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1]));
@@ -485,6 +577,8 @@
     balance: "Balance comptable (ex. 9226.csv, ou édition globale)",
     liste_copros: "Liste des copros ICS (LISTE COPROS.csv)",
     contacts: "Extraction copropriétaires",
+    feuille_presence: "Feuille de présence (lots et tantièmes, ex. 8002.csv)",
+    liste_lots: "Liste des lots (ex. 8002.csv)",
     fichier_coproprietaires: "Fichier des copropriétaires (AAAA-MM-JJ_copro_….csv)",
     portefeuille_comptable: "Portefeuille comptables (COMPTABLES.csv)",
     portefeuille_gestionnaire: "Portefeuille gestionnaires (GESTIONNAIRES.csv)",
@@ -510,6 +604,8 @@
     if (n.includes("GESTIONNAIRES")) return "portefeuille_gestionnaire";
     if (n.includes("EXTRACTION")) return "contacts";
     if (n.endsWith(".CSV") && I.estFichierCoproprietaires(contenu)) return "fichier_coproprietaires";
+    if (n.endsWith(".CSV") && I.estFeuillePresence(contenu)) return "feuille_presence";
+    if (n.endsWith(".CSV") && I.estListeLots(contenu)) return "liste_lots";
     if (I.parseNomRelance && I.parseNomRelance(nom)) return "relance";
     if (I.estContratsIcs && I.estContratsIcs(contenu)) return "contrats_ics";
     if (I.estFacturesEdf && I.estFacturesEdf(contenu)) return "factures_edf";
@@ -539,6 +635,8 @@
       case "balance": { const r = I.importerBalance(nom, contenu); return `balance : ${r.copros.join(", ") || "aucune copro reconnue"}${r.inconnues.length ? ` (non reconnues : ${r.inconnues.join(", ")})` : ""}`; }
       case "factures_edf": { const r = I.importerFacturesEdf(nom, contenu); return `${r.factures} ligne(s) de facture (${r.nouvelles} nouvelle(s)), factures du ${U.jjmmaaaa(r.du)} au ${U.jjmmaaaa(r.au)}${r.pdl_rattaches ? `, ${r.pdl_rattaches} compte(s) rattaché(s) par le PDL` : ""}`; }
       case "contrats_ics": { const r = I.importerContratsIcs(nom, contenu); return `${r.contrats} contrat(s) : ${r.confirmes} rattachement(s) confirmé(s), ${r.ajoutes.length} ajouté(s), ${r.conflits.length} conflit(s), ${r.introuvables.length} compte(s) absent(s) de l'export`; }
+      case "feuille_presence": { const r = I.importerFeuillePresence(nom, contenu); return `copro ${r.copro} : ${r.coproprietaires} copropriétaire(s), ${r.lots} lot(s), clés ${r.codes.join(", ")}${r.ecarts.length ? ` — somme des lots ≠ total pour ${r.ecarts.join(", ")}` : ""}`; }
+      case "liste_lots": { const r = I.importerListeLots(nom, contenu); return `copro ${r.copro} : ${r.lots} lot(s)`; }
       case "relance": { const r = I.importerRelance(nom, contenu); return `relances du ${U.jjmmaaaa(r.date)} (${r.type}) : ${r.nb} copropriétaire(s)`; }
       case "sauvegarde": S.restaurer(U.lireTexte(contenu)); return "base restaurée";
       default: throw new Error("Type de fichier non reconnu : choisissez le type dans la liste.");
@@ -606,6 +704,8 @@
         rapport.push(`Fichier des copropriétaires : ${r.lignes} copropriétaire(s) sur ${r.copros} copro(s)`);
       }
     }
+    // feuilles de présence et listes des lots : une par copro, relues si le fichier a changé
+    rapport.push(...(await I.lireDocumentsLots(base)));
     d = await S.sousDossier(ressources, "CONSOS EDF");
     if (d) for (const f of await S.fichiers(d, (x) => /\.(csv|zip)$/i.test(x))) { // export des factures EDF (source principale), CSV ou .zip d'EDF
       const fi = f.getFile ? await f.getFile() : null;

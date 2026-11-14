@@ -35,35 +35,59 @@
     const n = Number(s);
     return Number.isFinite(n) ? n : null;
   };
-  const fmt = (v, d) => Math.abs(v).toLocaleString("fr-FR", { minimumFractionDigits: d, maximumFractionDigits: d }).replace(/\s/g, " ");
+  // formateurs mis en cache : toLocaleString() recrée un formateur à chaque appel (coûteux sur les grands tableaux)
+  const formateurs = new Map();
+  const formateur = (d) => {
+    let f = formateurs.get(d);
+    if (!f) { f = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: d, maximumFractionDigits: d }); formateurs.set(d, f); }
+    return f;
+  };
+  const fmt = (v, d) => formateur(d).format(Math.abs(v)).replace(/\s/g, " ");
+  // négatif à l'affichage seulement s'il ne s'arrondit pas à zéro (un écart de -0,001 € s'affiche « 0,00 € », pas « -0,00 € »)
+  const negatif = (v, d) => v < 0 && Math.abs(v) >= 0.5 * 10 ** -d;
   U.euro = (v, signe = false) => {
     if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "";
     v = Number(v);
-    if (signe) return (v >= 0 ? "+ " : "- ") + fmt(v, 2) + " €";
-    return (v < 0 ? "-" : "") + fmt(v, 2) + " €";
+    if (signe) return (negatif(v, 2) ? "- " : "+ ") + fmt(v, 2) + " €";
+    return (negatif(v, 2) ? "-" : "") + fmt(v, 2) + " €";
   };
   U.nombre = (v, d = 2) => {
     if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "";
     v = Number(v);
-    return (v < 0 ? "-" : "") + fmt(v, d);
+    return (negatif(v, d) ? "-" : "") + fmt(v, d);
   };
   U.pct = (v) => {
     if (v === null || v === undefined || v === "") return "";
     if (typeof v === "string") return v;
-    return (v >= 0 ? "+ " : "- ") + fmt(v * 100, 0) + "%";
+    if (!Number.isFinite(v)) return "";
+    return (negatif(v * 100, 0) ? "- " : "+ ") + fmt(v * 100, 0) + "%";
   };
   U.pct2 = (v) => {
     if (v === null || v === undefined || v === "") return "";
     if (typeof v === "string") return v;
-    return (v >= 0 ? "+ " : "- ") + fmt(v * 100, 2) + "%";
+    if (!Number.isFinite(v)) return "";
+    return (negatif(v * 100, 2) ? "- " : "+ ") + fmt(v * 100, 2) + "%";
   };
   U.saisie = (v) => (v === null || v === undefined || v === "" ? "" :
-    Number(v).toFixed(2).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","));
-  U.arrondi = (v, d = 2) => Math.round((v + Number.EPSILON) * 10 ** d) / 10 ** d;
+    U.arrondi(Number(v), 2).toFixed(2).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","));
+  /** Arrondi au plus proche, demi-unité arrondie en s'éloignant de zéro, symétrique pour les négatifs (-1,005 -> -1,01 comme 1,005 -> 1,01).
+      toPrecision(15) efface l'erreur de représentation des flottants (1,005 × 100 = 100,49999999999999). */
+  U.arrondi = (v, d = 2) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return n;
+    const f = 10 ** d, r = Math.round(Number((Math.abs(n) * f).toPrecision(15))) / f;
+    return n < 0 && r !== 0 ? -r : r;
+  };
 
   // ------------------------------------------------------------------ dates (stockées en 'AAAA-MM-JJ')
   const iso = (a, m, j) => `${String(a).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(j).padStart(2, "0")}`;
   U.iso = iso;
+  /** Date réelle du calendrier (31/02 ou 13e mois refusés) au format AAAA-MM-JJ, sinon null. */
+  const isoValide = (a, m, j) => {
+    a = Number(a); m = Number(m); j = Number(j);
+    if (!a || m < 1 || m > 12 || j < 1 || j > new Date(Date.UTC(a, m, 0)).getUTCDate()) return null;
+    return iso(a, m, j);
+  };
   U.dateFr = (v) => {
     if (v === null || v === undefined || v === "") return null;
     if (v instanceof Date) return iso(v.getFullYear(), v.getMonth() + 1, v.getDate());
@@ -73,11 +97,11 @@
     }
     const s = String(v).trim();
     let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (m) return iso(m[3], m[2], m[1]);
+    if (m) return isoValide(m[3], m[2], m[1]);
     m = s.match(/^(\d{4})[-/](\d{2})[-/](\d{2})/);
-    if (m) return iso(m[1], m[2], m[3]);
+    if (m) return isoValide(m[1], m[2], m[3]);
     m = s.match(/^(\d{2})\/(\d{2})\/(\d{2})$/);
-    if (m) return iso(2000 + Number(m[3]), m[2], m[1]);
+    if (m) return isoValide(2000 + Number(m[3]), m[2], m[1]);
     return null;
   };
   U.aujourdhui = () => U.dateFr(new Date());
@@ -116,7 +140,7 @@
     });
   U.ecrireCsv = (lignes, entete) => "﻿" + [entete, ...lignes].map((l) => l.map((c) => {
     const s = String(c ?? "");
-    return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   }).join(";")).join("\r\n");
 
   // ------------------------------------------------------------------ banque

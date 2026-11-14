@@ -634,13 +634,20 @@
 
   // ------------------------------------------------------------------ mandat de syndic (AG) : durée, révision annuelle des honoraires
   const ajouterMoisIso = (iso, n) => { const d = new Date(`${iso}T12:00:00Z`); const j = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n); const fin = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate(); d.setUTCDate(Math.min(j, fin)); return d.toISOString().slice(0, 10); };
+  /** Veille de la date anniversaire (début + n mois). Si le jour n'existe pas dans le mois d'arrivée (29/02 -> février de 28 jours, 31 -> mois de 30),
+      l'anniversaire tombe le 1er du mois suivant : la veille est le dernier jour du mois (29/02/2024 + 12 mois -> 28/02/2025, pas le 27). */
+  M.veilleAnniversaire = (debut, mois) => {
+    const anniv = ajouterMoisIso(debut, mois);
+    if (Number(anniv.slice(8)) < Number(debut.slice(8))) return anniv; // jour ramené à la fin du mois
+    const d = new Date(`${anniv}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - 1);
+    return d.toISOString().slice(0, 10);
+  };
   /** Fin du mandat : date saisie, sinon début + durée (veille de la date anniversaire). */
   M.finMandat = (m) => {
     if (!m) return "";
     if (m.fin) return m.fin;
     if (!m.debut || !Number(m.duree_mois)) return "";
-    const d = new Date(`${ajouterMoisIso(m.debut, Number(m.duree_mois))}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - 1);
-    return d.toISOString().slice(0, 10);
+    return M.veilleAnniversaire(m.debut, Number(m.duree_mois));
   };
   /** Durée du mandat déduite des dates (début → lendemain de la fin), arrondie au mois ; sinon l'ancienne durée saisie. */
   M.dureeMandat = (m) => {
@@ -835,6 +842,18 @@
     return n;
   };
   const mediane = (v) => { const s = v.filter((x) => x !== null && Number.isFinite(x)).sort((a, b) => a - b); if (!s.length) return null; const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  /** Mail d'information d'un prélèvement rejeté au copropriétaire (texte des paramètres, mots entre accolades remplacés). {a, objet, corps, fichier}. */
+  M.MAIL_IMPAYE_DEFAUT = "Bonjour,\n\nNous vous informons que le prélèvement de {montant} présenté le {date} sur votre compte de copropriétaire de la copropriété {copro} a été rejeté par votre banque{motif}.\n\n" +
+    "Nous vous remercions de bien vouloir régulariser cette somme dans les meilleurs délais, par virement sur le compte de la copropriété (coordonnées bancaires sur votre appel de fonds), " +
+    "et de vérifier auprès de votre banque que les prochains prélèvements pourront être honorés.\n\nSi vous avez déjà procédé à la régularisation, merci de ne pas tenir compte de ce message.\n\nCordialement,\n";
+  M.mailImpayePrelevement = (i, c, cp) => {
+    const motif = [i.code_motif, i.motif].filter(Boolean).join(" — ");
+    const val = { montant: U.euro(i.montant), date: U.jjmmaaaa(i.date_impaye), copro: c ? c.nom : i.copro_libelle || "", numero: c ? c.numero : "", debiteur: i.debiteur || "",
+      motif: motif ? ` (motif : ${motif})` : "" };
+    const corps = String(S.param("mail_impaye") || M.MAIL_IMPAYE_DEFAUT).replace(/\{(\w+)\}/g, (x, k) => (k in val ? val[k] : x));
+    return { a: cp ? (cp.emails || []).join("; ") : "", objet: `${c ? `${c.numero} - ${c.nom}` : i.copro_libelle || "Copropriété"} : rejet de votre prélèvement du ${val.date}`,
+      corps, fichier: `${c ? c.numero : "copro"} REJET PRELEVEMENT ${i.debiteur || ""} ${i.date_impaye || ""}`.trim() };
+  };
   /** Honoraires à revoir : copros actives dont les honoraires proposés n'augmentent pas (< 0,5 %), sans hausse depuis 2 exercices ou plus,
       ou dont le HT par lot (ou par m²) est nettement sous la médiane des copros du même type et de la même unité. */
   M.SEUIL_SOUS_MEDIANE = 0.85;

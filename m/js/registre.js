@@ -146,9 +146,7 @@
   /** Nouveau mandat proposé : même durée que le précédent (3 ans à défaut), à partir de la date de l'AG. */
   M.mandatPropose = (c, dateAg) => {
     const duree = (M.dureeMandat && M.dureeMandat(c.mandat)) || 36;
-    const d = new Date(`${dateAg}T12:00:00Z`); const j = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + duree);
-    d.setUTCDate(Math.min(j, new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate())); d.setUTCDate(d.getUTCDate() - 1);
-    return { debut: dateAg, fin: d.toISOString().slice(0, 10), duree_mois: duree };
+    return { debut: dateAg, fin: M.veilleAnniversaire(dateAg, duree), duree_mois: duree };
   };
   /** Données de la mise à jour annuelle du registre, préparées depuis l'appli (à vérifier avant de les recopier). */
   M.declarationRegistre = (c, exo) => {

@@ -49,6 +49,8 @@
       edf_exclus: [],         // comptes de facturation détachés à la main (jamais rattachés automatiquement)        // {id, compte, copro, reference}
       edf_conso: {},          // annee -> [lignes]
       catalogue: {},          // copro -> [{numero, lignes, mandataire, domiciliation}]
+      lots_liste: {},         // copro -> liste des lots {fichier, maj, lots: {n° lot: {type, bt, etage, escalier, porte, plan, coproprietaire}}}
+      lots: {},               // copro -> feuille de présence {fichier, maj, codes, totaux: {code clé: total}, coproprietaires: [{numero, nom, adresse, lots: [{lot, type, bt, t: {code: tantièmes}}]}]}
       contacts: [],
       coproprietaires: null,     // fichier des copropriétaires (export « AAAA-MM-JJ_copro_<cabinet>.csv ») {maj, fichier, liste: [{id, titre, nom, prenom, emails, …, copro}]}
       factures: [],           // historique complet des factures (éléments + instantané pour ressortir le PDF à l'identique)
@@ -163,7 +165,11 @@
       .catch((e) => { S.erreurSauvegarde = S.erreurNavigateur = String(e && e.message || e); if (S.surErreur) S.surErreur(); });
     if (immediat || !globalThis.indexedDB) faire(); else minuterie = setTimeout(faire, 300);
     clearTimeout(minuterieFichier);
-    minuterieFichier = setTimeout(() => S.sauverDansDossier().catch((e) => { if (e.code && S.surConflitDossier) S.surConflitDossier(e); }), 4000);
+    minuterieFichier = setTimeout(() => S.sauverDansDossier().catch((e) => {
+      if (e.code && S.surConflitDossier) return S.surConflitDossier(e);
+      // fichier OneDrive illisible, verrouillé, « en ligne uniquement »… : ne jamais échouer en silence
+      S.erreurSauvegarde = String(e && e.message || e); if (S.surErreur) S.surErreur();
+    }), 4000);
   };
 
   /** Mise à niveau des anciennes bases : le mail des synthèses n'a plus qu'un seul champ {commentaires}. */
@@ -194,9 +200,26 @@
   };
 
   S.exporterJson = () => JSON.stringify(S.db);
-  S.restaurer = (texte) => {
-    const db = JSON.parse(texte);
+  /** Copie de secours de la base actuelle avant qu'elle soit remplacée (restauration, rechargement depuis OneDrive). */
+  S.mettreDeCote = () => {
+    if (!S.nbCopros(S.db)) return null;
+    const json = S.exporterJson(), nom = `avant-restauration-${new Date().toISOString().slice(0, 23).replace(/[:.]/g, "-")}.json`;
+    const p = Promise.all([
+      idbSet("db_avant_restauration", JSON.parse(json)).catch(() => {}),
+      S.dossierPret() ? S.dossier.getDirectoryHandle(DOSSIER_HISTORIQUE, { create: true }).then((hist) => S.ecrireFichier(hist, nom, json)).catch((e) => console.warn(e)) : null,
+    ]);
+    S.miseDeCote = p; // promesse de la dernière copie de secours (S.restaurer est synchrone)
+    return p;
+  };
+  S.nbCopros = (db) => Object.keys((db && db.copros) || {}).length;
+  /** Remplace la base par une sauvegarde. Une sauvegarde sans aucune copro est refusée (fichier vide ou abîmé) sauf accepterVide ;
+      la base remplacée est d'abord mise de côté (navigateur + dossier « K-BDD sauvegardes\avant-restauration-… »). */
+  S.restaurer = (texte, { accepterVide = false } = {}) => {
+    let db;
+    try { db = JSON.parse(texte); } catch (e) { throw new Error("Ce fichier n'est pas une sauvegarde K-BDD lisible (fichier incomplet ou abîmé)."); }
     if (!db || typeof db !== "object" || !db.copros) throw new Error("Ce fichier n'est pas une sauvegarde K-BDD.");
+    if (!accepterVide && !S.nbCopros(db) && S.nbCopros(S.db)) throw new Error("Cette sauvegarde ne contient aucune copro : elle n'a pas été chargée (la base actuelle est conservée).");
+    S.mettreDeCote();
     S.db = Object.assign(baseVide(), db);
     S.normaliser();
     S.sauver(true);
@@ -218,6 +241,11 @@
     return S.permission;
   };
   S.dossierPret = () => S.dossier && S.permission === "granted";
+  /** Oublie le dossier OneDrive dans ce navigateur (le dossier et ses fichiers ne sont pas touchés). */
+  S.delierDossier = async () => {
+    S.dossier = null; S.permission = "absente"; S.dossierVu = 0; S.syncLe = ""; nbDossier = null;
+    try { await idbSet("dossier", null); } catch (e) { /* stockage indisponible */ }
+  };
   /** Dossier choisi à part mais situé dans BASE DE DONNÉES (ex. RESSOURCES\VIREMENTS CIC) : retrouvé depuis la base, il profite de son
       autorisation (pas de seconde demande). Renvoie le dossier atteint depuis BASE DE DONNÉES, ou null s'il est ailleurs. */
   S.deriverDepuisBase = async (h) => {
@@ -360,6 +388,12 @@
     }
     return courant;
   };
+  /** Sous-dossier retrouvé (accents / casse ignorés) ou créé, niveau par niveau. */
+  S.creerSousDossier = async (base, ...noms) => {
+    let courant = base;
+    for (const nom of noms) courant = (await S.sousDossier(courant, nom)) || (await courant.getDirectoryHandle(nom, { create: true }));
+    return courant;
+  };
   S.fichiers = async (dossier, filtre = () => true) => {
     const res = [];
     if (!dossier) return res;
@@ -389,7 +423,22 @@
      a changé depuis notre dernière écriture (date du fichier), comparée à la version de la base que nous y avions mise. */
   S.dossierVu = 0;      // date (lastModified) du fichier de sauvegarde après notre dernière écriture / lecture
   S.syncLe = "";        // modifie_le de la base au moment de cette écriture / lecture
+  /* Une seule écriture à la fois : la copie suivante (minuterie de 4 s, sauvegarde au démarrage…) attend la fin de celle en cours. Sinon,
+     sur un OneDrive lent, elle voit le fichier tout juste écrit par la précédente avant que sa date ne soit notée (S.dossierVu) et le prend
+     à tort pour une version écrite ailleurs (MODIFIE_AILLEURS). */
+  let ecritureEnCours = null;
   S.sauverDansDossier = async (verifier = false) => {
+    while (ecritureEnCours) { try { await ecritureEnCours; } catch (e) { /* l'erreur est rendue à son propre appelant */ } }
+    const p = sauverDansDossierSeul(verifier);
+    ecritureEnCours = p;
+    try { return await p; } finally { if (ecritureEnCours === p) ecritureEnCours = null; }
+  };
+  /** Une base vide ou qui a perdu plus de la moitié de ses copros ne remplace pas la sauvegarde OneDrive sans accord explicite
+      (S.accepterReduction, posé après confirmation) : protège d'un navigateur vidé, d'un PC neuf ou d'une reprise partielle. */
+  S.accepterReduction = false;
+  let nbDossier = null; // nombre de copros de la sauvegarde OneDrive lors de notre dernière écriture
+  S.reductionSuspecte = (avant, apres) => avant > 0 && (apres === 0 || (avant >= 4 && apres < avant / 2));
+  const sauverDansDossierSeul = async (verifier) => {
     if (!S.dossierPret()) return false;
     const f = await S.fichier(S.dossier, NOM_SAUVEGARDE);
     if (f) {
@@ -404,8 +453,20 @@
           throw e;
         }
       }
+      if (!S.accepterReduction) {
+        // fichier inchangé depuis notre dernière écriture : son nombre de copros est connu, pas besoin de relire 8 Mo à chaque copie
+        let avant = S.dossierVu && fi.lastModified <= S.dossierVu + 1000 && nbDossier !== null ? nbDossier : 0;
+        if (avant === 0) try { avant = S.nbCopros(JSON.parse(await fi.text())); } catch (e) { /* illisible : rien à protéger */ }
+        const apres = S.nbCopros(S.db);
+        if (S.reductionSuspecte(avant, apres)) {
+          const e = new Error(`la base de ce navigateur (${apres} copro(s)) remplacerait la sauvegarde OneDrive (${avant} copro(s))`);
+          Object.assign(e, { code: "REDUCTION", avant, apres });
+          S.erreurSauvegarde = e.message;
+          throw e;
+        }
+      }
     }
-    try { return await ecrireCopies(); } catch (e) { S.erreurSauvegarde = e.message || String(e); throw e; }
+    try { const ok = await ecrireCopies(); S.accepterReduction = false; return ok; } catch (e) { S.erreurSauvegarde = e.message || String(e); throw e; }
   };
   /** Navigateur utilisé (noté dans la sauvegarde : qui l'a écrite). */
   S.navigateur = () => { const ua = (globalThis.navigator && navigator.userAgent) || ""; return /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : "navigateur"; };
@@ -425,6 +486,7 @@
     const json = S.exporterJson(), version = S.db.modifie_le || "";
     const fh = await S.ecrireFichier(S.dossier, NOM_SAUVEGARDE, json);
     try { S.dossierVu = (await fh.getFile()).lastModified; S.syncLe = version; } catch (e) { /* date du fichier indisponible */ }
+    nbDossier = S.nbCopros(S.db);
     const hist = await S.dossier.getDirectoryHandle(DOSSIER_HISTORIQUE, { create: true });
     await S.ecrireFichier(hist, `${U.aujourdhui()}.json`, json);
     try { await S.purgerHistorique(hist); } catch (e) { console.warn(e); }
@@ -462,7 +524,13 @@
   S.etatSauvegarde = (maintenant = new Date(), copie = S.derniereCopie()) => {
     if (!Object.keys(S.db.copros).length) return null;
     // dossier relié : la copie est automatique après chaque modification, on ne signale qu'un échec
-    if (S.dossierPret()) return S.erreurSauvegarde ? { jours: null, message: `La copie dans OneDrive a échoué (${S.erreurSauvegarde}).` } : null;
+    if (S.dossierPret()) {
+      if (S.erreurSauvegarde) return { jours: null, message: `La copie dans OneDrive a échoué (${S.erreurSauvegarde}).` };
+      const modifD = S.db.modifie_le ? new Date(S.db.modifie_le) : null, jd = copie ? (maintenant - new Date(copie.le)) / 86400000 : null;
+      if (modifD && copie && modifD > new Date(copie.le) && jd >= 1)
+        return { jours: Math.floor(jd), message: "Aucune copie réussie dans OneDrive depuis plus de 24 h alors que la base a été modifiée : vérifiez que le dossier est accessible." };
+      return null;
+    }
     const modif = S.db.modifie_le ? new Date(S.db.modifie_le) : null;
     if (copie && modif && modif <= new Date(copie.le)) return null; // rien de nouveau depuis la dernière copie
     const jours = copie ? Math.floor((maintenant - new Date(copie.le)) / 86400000) : null;

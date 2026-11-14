@@ -394,6 +394,33 @@
   M.supprimerEnergie = (numero, id) => M.majOperat(numero, { energies: M.operat(numero).energies.filter((x) => x.id !== id) });
   /** Consommations des parties communes d'une année, par énergie et par clé de répartition :
       électricité (synthèse EDF, regroupée selon la clé de chaque compte de facturation) + autres énergies saisies. */
+  /** Sous-compteurs électriques pour le décret tertiaire de l'année : relevés de l'exercice clos dans l'année (exercice décalé : celui qui se termine
+      dans l'année), conso retirée de la clé du PDL et affectée à la clé du poste d'arrivée, ou à un seul lot si le sous-compteur est privatif
+      (operat.sc_privatif[id] = "n° copropriétaire|n° lot"). Contrôle avec la compta de l'exercice (écriture du sous-compteur passée ?).
+      [{x, exercice, kwh, ttc, de, vers, privatif: {numero, lot} | null, statut (calcul / compta), pdl}] ; [] sans sous-compteur électrique. */
+  M.STATUTS_SC_DECRET = { passee: ["ok", "écriture passée en compta"], ecart_valide: ["ok", "écart validé"], meme_poste: ["ok", "même poste"],
+    a_passer: ["retard", "écriture pas encore passée en compta"], ecart: ["alerte", "écart avec la compta"], sans_extraction: ["retard", "extraction des charges absente : contrôle impossible"],
+    a_relever: ["alerte", "pas de relevé pour l'exercice"], index_initial: ["retard", "premier relevé : conso non calculable"], index_incoherent: ["alerte", "index incohérent"],
+    index_accepte: ["neutre", "index accepté (conso non calculée)"], sans_edf: ["retard", "factures EDF de l'exercice absentes (coût estimé)"], calcule: ["retard", "à contrôler"] };
+  M.exerciceDecret = (c, annee) => K.E.exerciceClos(c.exercice || "01/01 au 31/12", `${Number(annee) + 1}-01-01`);
+  M.privatifSc = (numero, id) => { const v = (M.operat(numero).sc_privatif || {})[id]; if (!v) return null; const [n, lot] = String(v).split("|"); return { numero: n, lot: lot || "" }; };
+  M.choisirPrivatifSc = (numero, id, valeur) => { const p = { ...(M.operat(numero).sc_privatif || {}) }; if (valeur) p[id] = valeur; else delete p[id]; return M.majOperat(numero, { sc_privatif: p }); };
+  M.transfertsSousCompteurs = (c, annee, pdlTous, ded) => {
+    const liste = (M.sousCompteurs ? M.sousCompteurs(c) : []).filter((x) => M.typeSc(x) === "elec");
+    if (!liste.length) return [];
+    const exo = M.exerciceDecret(c, annee), ctrl = M.controleSousCompteurs(c, exo);
+    const cleDuPoste = (poste) => { const p = M.lirePoste(poste); return p.cle || (p.compte ? M.cleDuCompteCharge(c.numero, p.compte) || "" : ""); };
+    return liste.map((x) => {
+      const l = (ctrl && ctrl.lignes.find((y) => y.x.id === x.id)) || { ...M.calculSousCompteur(c, x, exo), x };
+      const pdl = pdlTous.find((p) => p.rae === x.pdl) || null;
+      const de = pdl ? M.clePdl(c.numero, pdl, ded).cle : x.depart ? cleDuPoste(x.depart) : "";
+      const privatif = M.privatifSc(c.numero, x.id), vers = x.arrivee ? cleDuPoste(x.arrivee) : "";
+      const kwh = l.conso !== null && l.conso !== undefined && l.conso > 0 ? l.conso : null;
+      const prix = pdl && v(pdl.conso_kwh) ? v(pdl.total_ttc) / v(pdl.conso_kwh) : null;
+      const ttc = kwh === null ? null : l.montant !== null && l.montant !== undefined ? l.montant : prix !== null ? kwh * prix : null;
+      return { x, exercice: exo.libelle, kwh, ttc, de, vers, privatif, statut: l.statut, pdl: !!pdl };
+    });
+  };
   M.consosAnnee = (c, annee) => {
     annee = Number(annee);
     const comptes = new Set(S.db.edf_comptes.filter((k) => k.copro === c.numero).map((k) => k.compte));
@@ -403,9 +430,27 @@
     for (const l of pdlTous) { const cle = M.clePdl ? M.clePdl(c.numero, l, ded).cle : M.cleCompte(c.numero, l.compte_facturation); (parCle[cle] = parCle[cle] || []).push(l); }
     const lignes = Object.entries(parCle).map(([cle, pdl]) => ({ energie: "Électricité", cle, kwh: pdl.reduce((t, l) => t + v(l.conso_kwh), 0),
       ttc: pdl.reduce((t, l) => t + v(l.total_ttc), 0), source: `synthèse EDF ${annee}`, reference: `${pdl.length} point(s) de livraison`, pdl }));
+    // sous-compteurs : conso retirée de la clé du PDL, affectée à la clé d'arrivée ou au lot privatif
+    const sc = M.transfertsSousCompteurs(c, annee, pdlTous, ded);
+    for (const t of sc) {
+      if (t.kwh === null || !t.de || (!t.privatif && (!t.vers || t.vers === t.de))) continue;
+      const dep = lignes.find((l) => l.energie === "Électricité" && l.cle === t.de && !l.privatif);
+      if (!dep) continue;
+      t.applique = true;
+      dep.kwh -= t.kwh; dep.ttc -= v(t.ttc); (dep.sc_sorties = dep.sc_sorties || []).push(t);
+      if (t.privatif) {
+        lignes.push({ energie: "Électricité privative", cle: `Privatif · ${t.x.nom}`, kwh: t.kwh, ttc: t.ttc, source: `sous-compteur, exercice ${t.exercice}`, reference: t.x.nom, pdl: [], privatif: t.privatif, sc_entrees: [t] });
+        continue;
+      }
+      let arr = lignes.find((l) => l.energie === "Électricité" && l.cle === t.vers && !l.privatif);
+      if (!arr) { arr = { energie: "Électricité", cle: t.vers, kwh: 0, ttc: 0, source: `sous-compteurs, exercice ${t.exercice}`, reference: "", pdl: [] }; lignes.push(arr); }
+      arr.kwh += t.kwh; arr.ttc += v(t.ttc); (arr.sc_entrees = arr.sc_entrees || []).push(t);
+    }
     for (const e of M.operat(c.numero).energies.filter((x) => x.annee === annee))
       lignes.push({ id: e.id, energie: e.energie, cle: e.cle || M.cleParDefaut(c.numero), kwh: e.kwh, ttc: e.ttc, source: "saisie", reference: e.reference });
-    return { annee, lignes, pdl: pdlTous, kwh: lignes.reduce((t, l) => t + v(l.kwh), 0), ttc: lignes.reduce((t, l) => t + v(l.ttc), 0), edf_importe: !!(S.db.edf_conso[annee] || []).length };
+    const communes = lignes.filter((l) => !l.privatif), privatives = lignes.filter((l) => l.privatif);
+    return { annee, lignes, pdl: pdlTous, sc, kwh: communes.reduce((t, l) => t + v(l.kwh), 0), ttc: communes.reduce((t, l) => t + v(l.ttc), 0),
+      kwh_privatif: privatives.reduce((t, l) => t + v(l.kwh), 0), ttc_privatif: privatives.reduce((t, l) => t + v(l.ttc), 0), edf_importe: !!(S.db.edf_conso[annee] || []).length };
   };
   /** Trajectoire : année de référence (choisie, sinon la première connue), objectifs − 40 % / − 50 % / − 60 %. */
   M.OBJECTIFS_DECRET = { 2030: 0.4, 2040: 0.5, 2050: 0.6 };
@@ -434,21 +479,98 @@
     const x = { total: null, tantiemes: {}, ...(o.cles[cle] || {}), ...champs };
     return M.majOperat(numero, { cles: { ...o.cles, [cle]: x } });
   };
-  /** Répartition des consommations entre copropriétaires : chaque énergie au prorata des tantièmes de SA clé. */
+  /** Copropriétaire du fichier des copropriétaires (export « AAAA-MM-JJ_copro_….csv ») correspondant à un nom du catalogue ou de la feuille de présence :
+      nom complet identique (parenthèse du type « (S.C.I. » ignorée), sinon nom tronqué qui ne désigne qu'un seul copropriétaire. null sinon. */
+  const nomCompare = (s) => U.normaliser(String(s || "").replace(/\(.*$/, "")).replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  M.coproprietaireFichier = (numero, nom) => {
+    const liste = ((S.db.coproprietaires && S.db.coproprietaires.liste) || []).filter((x) => x.copro === numero), n = nomCompare(nom);
+    if (!n) return null;
+    const complet = (x) => [nomCompare(`${x.nom} ${x.prenom}`), nomCompare(`${x.prenom} ${x.nom}`), nomCompare(x.nom)];
+    const exact = liste.filter((x) => complet(x).includes(n));
+    if (exact.length === 1) return exact[0];
+    const prefixe = liste.filter((x) => complet(x).some((c) => c.startsWith(n) || (n.length >= 12 && n.startsWith(c))));
+    return prefixe.length === 1 ? prefixe[0] : null;
+  };
+  /** Feuille de présence de la copro (lots et tantièmes par clé), importée de RESSOURCES\FEUILLES DE PRESENCE ; null sinon. */
+  M.lotsCopro = (numero) => (S.db.lots || {})[numero] || null;
+  /** Code d'une clé de répartition (« CHARGES GENERALES » -> « 0100 ») d'après les extractions de charges de la copro. */
+  M.codeCle = (numero, cle) => {
+    const n = U.normaliser(cle);
+    for (const b of Object.values(S.db.budgets)) if (b.copro === numero) for (const l of b.lignes) if (l.cle_code && U.normaliser(l.cle) === n) return l.cle_code;
+    const m = String(cle || "").match(/^(\d{4})\b/);
+    return m ? m[1] : "";
+  };
+  /** Étage de la liste des lots en clair : SS -> Sous-sol, S2 -> 2e sous-sol, RC -> Rez-de-chaussée, 01 -> 1er étage, 02 -> 2e étage… */
+  M.libelleEtage = (e) => {
+    const x = U.normaliser(String(e || "")).replace(/\s+/g, "");
+    if (!x) return "";
+    if (x === "SS" || x === "SS1" || x === "S1") return "Sous-sol";
+    let m = x.match(/^(?:SS|S)-?(\d)$/) || x.match(/^-(\d)$/);
+    if (m) return `${m[1]}e sous-sol`;
+    if (["RC", "RDC", "RCH", "RJ", "00", "0"].includes(x)) return "Rez-de-chaussée";
+    if (x === "RCS" || x === "ENT") return "Entresol";
+    if (x === "CO" || x === "CB" || x === "COMBLES") return "Combles";
+    if (x === "TE" || x === "TER") return "Terrasse";
+    m = x.match(/^0*(\d{1,2})$/);
+    if (m) return Number(m[1]) === 1 ? "1er étage" : `${Number(m[1])}e étage`;
+    return String(e).trim();
+  };
+  /** Détail d'un lot (texte) : « Parking B24 · Sous-sol ». */
+  M.detailLot = (lot) => [[lot.type, lot.plan].filter(Boolean).join(" "), M.libelleEtage(lot.etage)].filter(Boolean).join(" · ");
+  /** Attestations OPERAT générées : BASE DE DONNÉES\ATTESTATIONS OPERAT\<n° copro>\<année>\ (un PDF par copropriétaire, mails dans MAILS). */
+  M.DOSSIER_ATTESTATIONS = "ATTESTATIONS OPERAT";
+  M.cheminAttestations = (numero, annee) => [M.DOSSIER_ATTESTATIONS, numero, String(annee)];
+  M.nomAttestationOperat = (ligne, annee) => `${ligne.ref} ${U.compacter(String(ligne.nom || "").replace(/[<>:"/\\|?*()]/g, " ")).slice(0, 60).trim()} - ATTESTATION OPERAT ${annee}`;
+  /** Copropriétaires à attester : ceux qui ont une quote-part, avec les attestations de leurs lots concernés (une page par lot). */
+  M.attestationsParCoproprietaire = (c, annee) => {
+    const r = M.repartitionParLot(c, annee);
+    return { r, liste: r.lignes.filter((l) => l.concerne).map((l) => ({ ligne: l, lots: r.lots.filter((x) => x.numero === l.numero && x.concerne && x.kwh) })) };
+  };
+  M.noterGenerationOperat = (numero, annee, bilan) => M.majOperat(numero, { generations: { ...(M.operat(numero).generations || {}), [annee]: bilan } });
+  M.listeLotsCopro = (numero) => (S.db.lots_liste || {})[numero] || null;
+  /** Colonne de la feuille de présence d'une clé de répartition : choix enregistré (operat.cle_colonne), sinon code de la clé dans les extractions
+      de charges (« CHARGES GENERALES » = 0100 -> colonne 01), sinon numéro entre parenthèses du nom (« CHARGES DE BATIMENT A (8) » -> colonne 08).
+      {code, origine: choisie | extraction | parenthese | ""}. */
+  M.colonneCle = (numero, cle) => {
+    const f = M.lotsCopro(numero), choix = (M.operat(numero).cle_colonne || {})[cle];
+    if (choix !== undefined) return { code: choix, origine: "choisie" };
+    if (!f) return { code: "", origine: "" };
+    const c1 = M.codeCle(numero, cle);
+    if (c1 && f.codes.includes(c1)) return { code: c1, origine: "extraction" };
+    const m = String(cle || "").match(/\((\d{1,2})\)\s*$/), c2 = m ? `${m[1].padStart(2, "0")}00` : "";
+    if (c2 && f.codes.includes(c2)) return { code: c2, origine: "parenthese" };
+    return { code: "", origine: "" };
+  };
+  M.choisirColonneCle = (numero, cle, code) => M.majOperat(numero, { cle_colonne: { ...(M.operat(numero).cle_colonne || {}), [cle]: code } });
+  /** Tantièmes d'une clé tirés de la feuille de présence : {total, tantiemes: {n° copropriétaire: somme de ses lots}, code} ; null si la clé n'est rattachée à aucune colonne. */
+  M.tantiemesFeuille = (numero, cle) => {
+    const f = M.lotsCopro(numero), code = f && M.colonneCle(numero, cle).code;
+    if (!f || !code || !f.codes.includes(code) || !f.totaux[code]) return null;
+    return { code, total: f.totaux[code], tantiemes: Object.fromEntries(f.coproprietaires.map((x) => [x.numero, x.lots.reduce((s, y) => s + (y.t[code] || 0), 0)])) };
+  };
+  /** Répartition des consommations entre copropriétaires : chaque énergie au prorata des tantièmes de SA clé, lus dans la feuille de présence
+      (colonne rattachée à la clé). Sans feuille de présence, aucune répartition (plus de saisie manuelle des tantièmes). */
   M.repartitionTantiemes = (c, annee) => {
     const o = M.operat(c.numero);
     const conso = M.consosAnnee(c, annee);
-    const cat = S.db.catalogue[c.numero] || [];
+    const cat = S.db.catalogue[c.numero] || [], feuille = M.lotsCopro(c.numero);
     const utilisees = [...new Set(conso.lignes.map((l) => l.cle))];
     const cles = {};
-    for (const k of new Set([...utilisees, ...Object.keys(o.cles)])) {
-      const x = o.cles[k] || { total: null, tantiemes: {} };
-      const somme = Object.values(x.tantiemes).reduce((t, y) => t + v(y), 0);
-      cles[k] = { total: Number(x.total) || somme, somme, saisi: x.total, tantiemes: x.tantiemes, utilisee: utilisees.includes(k) };
+    for (const l of conso.lignes.filter((x) => x.privatif)) cles[l.cle] = { total: 1, somme: 1, saisi: null, tantiemes: { [l.privatif.numero]: 1 }, utilisee: true, source: "privatif", code: "", origine: "", privatif: l.privatif };
+    for (const k of utilisees) {
+      if (cles[k]) continue;
+      const fe = M.tantiemesFeuille(c.numero, k);
+      cles[k] = fe ? { total: fe.total, somme: fe.total, saisi: null, tantiemes: fe.tantiemes, utilisee: utilisees.includes(k), source: "feuille", code: fe.code, origine: M.colonneCle(c.numero, k).origine }
+        : { total: null, somme: 0, saisi: null, tantiemes: {}, utilisee: utilisees.includes(k), source: "", code: "", origine: "" };
     }
-    const numeros = [...new Set([...cat.map((e) => e.numero), ...Object.values(o.cles).flatMap((x) => Object.keys(x.tantiemes))])].sort();
+    // copropriétaires : catalogue et feuille de présence (n° de compte) ; à défaut des deux, fichier des copropriétaires (référence = ID)
+    const fichier = ((S.db.coproprietaires && S.db.coproprietaires.liste) || []).filter((x) => x.copro === c.numero);
+    const sansNumero = [];
+    const numeros = feuille ? feuille.coproprietaires.map((x) => x.numero).sort() : [];
     const lignes = numeros.map((n) => {
-      const e = cat.find((x) => x.numero === n);
+      const fc = feuille && feuille.coproprietaires.find((x) => x.numero === n), fx = sansNumero.find((x) => x.id === n);
+      const e = cat.find((x) => x.numero === n) || (fc ? { lignes: [fc.nom, ...fc.adresse] } : fx ? { lignes: [U.compacter(`${fx.titre} ${fx.nom} ${fx.prenom}`)] } : null);
+      const cf = fx || (e ? M.coproprietaireFichier(c.numero, e.lignes[0]) : null);
       const energies = conso.lignes.map((l) => {
         const k = cles[l.cle];
         const t = k.tantiemes[n] ?? null;
@@ -458,10 +580,32 @@
       const connues = energies.filter((x) => x.part !== null);
       return { numero: n, ref: `${c.numero}-${n}`, nom: e ? e.lignes[0] : "", adresse: e ? e.lignes.slice(1) : [], energies,
         tantiemes: Object.fromEntries(Object.keys(cles).map((k) => [k, cles[k].tantiemes[n] ?? null])),
-        concerne: energies.some((x) => x.part), complet: energies.every((x) => x.part !== null),
+        concerne: energies.some((x) => x.part), complet: energies.every((x) => x.part !== null), lots: fc ? fc.lots : [],
+        email: cf ? cf.emails[0] || "" : "", emails: cf ? cf.emails : [], id_perso: cf ? cf.id : "", source: cat.find((x) => x.numero === n) ? "catalogue" : fc ? "feuille" : fx ? "fichier" : "",
         kwh: connues.length ? connues.reduce((t, x) => t + v(x.kwh), 0) : null, ttc: connues.length ? connues.reduce((t, x) => t + v(x.ttc), 0) : null };
     });
-    return { conso, cles, lignes, complet: lignes.length > 0 && utilisees.every((k) => Object.keys(cles[k].tantiemes).length > 0) };
+    return { conso, cles, lignes, feuille, complet: lignes.length > 0 && utilisees.every((k) => Object.keys(cles[k].tantiemes).length > 0) };
+  };
+  /** Répartition par lot (attestations des bailleurs qui louent des lots précis) : un lot de la feuille de présence = une ligne,
+      quote-part de chaque énergie = tantièmes du lot dans le code de sa clé / total de la clé. Clés sans code dans la feuille : quote-part inconnue. */
+  M.repartitionParLot = (c, annee) => {
+    const r = M.repartitionTantiemes(c, annee);
+    if (!r.feuille) return { ...r, lots: [] };
+    const lots = [], liste = M.listeLotsCopro(c.numero);
+    for (const k of Object.values(r.cles)) if (k.source === "privatif" && !k.privatif.lot) { const cp = r.lignes.find((x) => x.numero === k.privatif.numero); k.privatif = { ...k.privatif, lot: cp && cp.lots[0] ? cp.lots[0].lot : "" }; }
+    for (const l of r.lignes) for (const lot of l.lots) {
+      const li = liste && liste.lots[lot.lot];
+      const energies = r.conso.lignes.map((x) => {
+        const k = r.cles[x.cle], code = k && k.source === "feuille" ? k.code : "";
+        const t = k && k.source === "privatif" ? (l.numero === k.privatif.numero && (!k.privatif.lot || k.privatif.lot === lot.lot) ? 1 : 0) : code ? lot.t[code] || 0 : null;
+        const part = t !== null && k.total ? t / k.total : null;
+        return { energie: x.energie, cle: x.cle, tantiemes: t, total: k ? k.total : null, part, kwh: part === null ? null : x.kwh * part, ttc: part === null || x.ttc === null ? null : v(x.ttc) * part };
+      });
+      const connues = energies.filter((x) => x.part !== null);
+      lots.push({ numero: l.numero, ref: l.ref, nom: l.nom, adresse: l.adresse, email: l.email, emails: l.emails, lot: { numero: lot.lot, type: (li && li.type) || lot.type, bt: (li && li.bt) || lot.bt, etage: li ? li.etage : "", escalier: li ? li.escalier : "", porte: li ? li.porte : "", plan: li ? li.plan : "" }, energies,
+        concerne: energies.some((x) => x.part), kwh: connues.length ? connues.reduce((t, x) => t + v(x.kwh), 0) : null, ttc: connues.length ? connues.reduce((t, x) => t + v(x.ttc), 0) : null });
+    }
+    return { ...r, lots };
   };
   M.statutOperat = (numero, annee) => M.operat(numero).declarations[annee] || {};
   M.marquerOperat = (numero, annee, champ, fait = true) => {
@@ -489,7 +633,17 @@
     if (!conso.edf_importe) res.push(`Synthèse EDF ${annee} non importée.`);
     // tantièmes manquants pour une clé utilisée
     const o = M.operat(c.numero);
-    for (const k of new Set(conso.lignes.map((l) => l.cle))) if (!o.cles[k] || !Object.keys(o.cles[k].tantiemes || {}).length) res.push(`Tantièmes de la clé « ${k} » non renseignés : attestations impossibles pour cette énergie.`);
+    if (!M.lotsCopro(c.numero)) res.push(`Feuille de présence absente : déposez ${c.numero}.csv dans RESSOURCES › FEUILLES DE PRESENCE.`);
+    if (!M.listeLotsCopro(c.numero)) res.push(`Liste des lots absente : déposez ${c.numero}.csv dans RESSOURCES › LISTE LOTS.`);
+    for (const t of conso.sc || []) {
+      const [, lib] = M.STATUTS_SC_DECRET[t.statut] || ["", t.statut];
+      if (["passee", "ecart_valide", "meme_poste"].includes(t.statut) && t.applique) continue;
+      if (t.kwh === null) res.push(`Sous-compteur « ${t.x.nom} » (exercice ${t.exercice}) : ${lib} — sa consommation reste dans la clé de son PDL.`);
+      else if (!t.applique) res.push(`Sous-compteur « ${t.x.nom} » : ${!t.de ? "PDL ou clé de départ inconnu" : !t.vers && !t.privatif ? "clé du poste d'arrivée inconnue" : "clé de départ absente des consommations"} — consommation non reportée.`);
+      else res.push(`Sous-compteur « ${t.x.nom} » (exercice ${t.exercice}) : ${lib}.`);
+    }
+    for (const l of conso.lignes) if (l.sc_sorties && l.kwh < -0.5) res.push(`Clé « ${l.cle} » : les sous-compteurs dépassent la consommation du PDL (${U.nombre(l.kwh, 0)} kWh) : relevés à vérifier.`);
+    if (M.lotsCopro(c.numero)) for (const k of new Set(conso.lignes.filter((l) => !l.privatif).map((l) => l.cle))) if (!M.tantiemesFeuille(c.numero, k)) res.push(`Clé « ${k} » rattachée à aucune colonne de la feuille de présence : choisissez sa colonne (attestations impossibles pour cette énergie).`);
     const prec = M.consosAnnee(c, Number(annee) - 1);
     if (prec.kwh && conso.kwh && Math.abs(conso.kwh / prec.kwh - 1) >= 0.3) res.push(`Variation de ${U.pct(conso.kwh / prec.kwh - 1)} par rapport à ${Number(annee) - 1}.`);
     return res;

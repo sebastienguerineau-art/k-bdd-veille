@@ -42,6 +42,8 @@
     const m = n.match(/(\d{2})[ _.-](\d{2})[ _.-](\d{4})[ _.-]*(GLOBAL|RAR|RS)\b/) || n.match(/(GLOBAL|RAR|RS)[ _.-]*(\d{2})[ _.-](\d{2})[ _.-](\d{4})/);
     if (!m) return null;
     const [j, mo, a, type] = m[4] && /^\d/.test(m[1]) ? [m[1], m[2], m[3], m[4]] : [m[2], m[3], m[4], m[1]];
+    const d = new Date(Date.UTC(Number(a), Number(mo) - 1, Number(j)));
+    if (d.getUTCMonth() !== Number(mo) - 1 || d.getUTCDate() !== Number(j)) return null; // date impossible (31/02…)
     return { date: `${a}-${mo}-${j}`, type };
   };
 
@@ -138,10 +140,11 @@
     }).map((l) => ({ ...l, etape: M.prochaineEtapeRelance(l, aujourdhui, anterieures.some((c) => c.RS)) })).sort((a, b) => a.copro.localeCompare(b.copro) || b.solde - a.solde);
     const somme = (l, k) => l.reduce((t, x) => t + v(x[k]), 0);
     const actifs = lignes.filter((l) => !l.sorti);
+    const debiteurs = actifs.filter((l) => v(l.solde) > 0); // un copropriétaire créditeur (solde négatif) n'est pas un débiteur et ne réduit pas le total dû
     return {
       campagne: cur, precedente: prec, lignes,
       totaux: {
-        debiteurs: actifs.length, solde: somme(actifs, "solde"), solde_prec: prec ? somme(Object.values(globPrec), "solde") : null,
+        debiteurs: debiteurs.length, solde: somme(debiteurs, "solde"), solde_prec: prec ? somme(Object.values(globPrec), "solde") : null,
         mouvements: prec ? somme(lignes, "mouvement") : null,
         med: lignes.filter((l) => l.action === "MED").length, rs: lignes.filter((l) => l.action === "RS").length,
         sans_action: actifs.filter((l) => l.action === "aucune").length, nouveaux: lignes.filter((l) => l.nouveau).length,
@@ -161,7 +164,7 @@
     // débiteurs encore présents ayant reçu au moins une MED, la plus ancienne d'abord
     const meds = lignes.filter((l) => l.nb_med).sort((a, b) => b.delai_med - a.delai_med || b.solde - a.solde);
     return { date: s.campagne.date, med: meds.length, a_relancer: lignes.filter((l) => l.a_relancer).length,
-      debiteurs: lignes.length, solde: lignes.reduce((t, l) => t + v(l.solde), 0),
+      debiteurs: lignes.filter((l) => v(l.solde) > 0).length, solde: lignes.reduce((t, l) => t + Math.max(0, v(l.solde)), 0),
       meds, solde_med: meds.reduce((t, l) => t + v(l.solde), 0), delai_max: meds.length ? meds[0].delai_med : null };
   };
 })(globalThis.K = globalThis.K || {});

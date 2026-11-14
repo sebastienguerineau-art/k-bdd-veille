@@ -132,3 +132,4 @@ body.re-page main:has(.mr-envoyer:not([hidden])) { padding-bottom: 0; }
 .re-nom { flex-direction: column; align-items: stretch; margin-top: 12px; }
 .m-bouton.mr-partager { display: flex; align-items: center; justify-content: center; gap: 8px; margin: -2px 0 14px; padding: 11px; color: var(--marine); font-weight: 600; }
 .mr-partager svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.m-sc-statut { margin-top: 4px; }

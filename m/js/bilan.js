@@ -139,7 +139,7 @@
       const f = await fh.getFile();
       const contenu = new Uint8Array(await f.arrayBuffer());
       if (!I.estBalance(contenu)) continue;
-      const r = I.importerBalance(f.name, contenu, f.lastModified ? new Date(f.lastModified).toISOString().slice(0, 10) : U.aujourdhui());
+      const r = I.importerBalance(f.name, contenu, f.lastModified ? U.dateFr(new Date(f.lastModified)) : U.aujourdhui());
       res.fichiers++; res.nouveaux += r.nouveaux; res.inconnues.push(...r.inconnues);
     }
     return res;
