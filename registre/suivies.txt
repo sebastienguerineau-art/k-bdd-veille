@@ -2,3 +2,7 @@
 # Un numéro d'immatriculation par ligne (2 lettres + 7 chiffres), par exemple : AB1234567
 # Les lignes commençant par # sont ignorées. Le fichier est lu chaque matin par outils/registre.js.
 AF1435296
+AF1416973
+AA8121980
+AE4123618
+AG7438724
